@@ -1,27 +1,9 @@
-# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-*.env
-*.venv
-*.egg-info/
-dist/
 build/
-*.spec
-
-# PyInstaller
-*.manifest
-*.log
-*.exe
-*.dll
-
-# IDE
-.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
-
-# OS
-.DS_Store
-Thumbs.db
+dist/
+installer_output/
+selftest.log
+.sad_usage.json
+.sad_weather_cache/
+*.spec.bak

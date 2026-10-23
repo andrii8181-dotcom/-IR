@@ -1,0 +1,1034 @@
+# sad_weather.py — S.A.D. v2.1: модуль «Погода» (вікно)
+# -*- coding: utf-8 -*-
+from sad_common import *
+import re, time, json, queue, threading, calendar
+import datetime as _dt
+import sad_weather_core as W
+import sad_weather_charts as CH
+import sad_weather_export as X
+
+HTC_BG = {"d4": "#f4b6b6", "d3": "#f8cbad", "d2": "#fce4d6", "d1": "#fff2cc",
+          "ok": "#e2efda", "wet": "#ddebf7"}
+RF = ("Times New Roman", 11)
+RB = ("Times New Roman", 11, "bold")
+HTC_METHODS = {"Декадний облік (за методичним посібником)": "decade",
+               "Місячний облік (за методичним посібником)": "month",
+               "Добовий (лише доби з t > 10 °C)": "daily"}
+
+
+def parse_md(text):
+    """«ММ-ДД» (також ММ.ДД чи ММ/ДД) → (місяць, день)."""
+    m = re.fullmatch(r"\s*(\d{1,2})\s*[-./]\s*(\d{1,2})\s*", str(text))
+    if not m: raise ValueError(f"«{text}»: потрібен формат ММ-ДД (наприклад 04-01)")
+    mo, d = int(m.group(1)), int(m.group(2))
+    if not (1 <= mo <= 12) or not (1 <= d <= calendar.monthrange(2024, mo)[1]):
+        raise ValueError(f"«{text}»: такої дати не існує")
+    return mo, d
+
+
+class WeatherWindow:
+    HELP_TEXT = """
+МОДУЛЬ «ПОГОДА» — ІНСТРУКЦІЯ
+═══════════════════════════════════════════════
+
+ДЛЯ ЧОГО?
+  Отримати метеодані для місця й періоду досліду, одразу порахувати
+  агрокліматичні показники, побудувати графіки й експортувати все у
+  вигляді, придатному для статті чи дисертації. Погода пояснює частину
+  змін у показниках між роками (посуха, нестача тепла, заморозки).
+
+ДЖЕРЕЛА ДАНИХ
+  NASA POWER (рекомендовано за замовчуванням)
+    Реаналіз MERRA-2, розрізнення 0,5°×0,625° (≈ 55×46 км) для
+    метеорології, 1°×1° для радіації. З 1981 р. Безкоштовно; у публікації
+    потрібна подяка NASA (її текст додається до експорту). Дані останніх
+    2–3 місяців — попередні, потім NASA їх уточнює.
+  Open-Meteo (реаналіз ERA5)
+    Розрізнення 0,25° (≈ 28×18 км), з 1940 р., є ET₀ й сяйво. Затримка
+    ≈ 5 діб. УВАГА: безкоштовний доступ — лише для НЕКОМЕРЦІЙНОГО
+    використання (публічні дослідження в державних установах — дозволено;
+    програми з підпискою та комерційні продукти — ні). Ліміт 10 000
+    викликів на добу.
+  Власні дані (метеостанція)
+    CSV / Excel / вставка з буфера: стовпці дата, tсер, tmax, tmin, опади
+    тощо. Найточніше для дисертації, якщо станція поблизу ділянки.
+
+ВАЖЛИВО ПРО ТОЧНІСТЬ
+  NASA POWER та Open-Meteo — це реаналіз для комірки сітки, а не
+  вимірювання на вашій ділянці. Опади згладжені, екстремуми занижені.
+  Програма показує відстань від вашої точки до центру комірки.
+  Для дисертації бажано порівняти з найближчою станцією.
+
+ДАНІ Й КЕШ
+  Усе, що завантажено, зберігається в теці користувача (.sad_weather_cache),
+  тому повторні запити миттєві й працюють без інтернету. Свіжі періоди
+  (менше 100 діб) кеш оновлює щодоби. Прапорець «Ігнорувати кеш» —
+  примусове оновлення. Дата отримання даних фіксується у звіті.
+
+ПОКАЗНИКИ
+  САТ (сума активних температур) — сума середньодобових температур за
+    доби, коли t > порогу (5, 10, 15 °C).
+  СЕТ (сума ефективних температур) — сума перевищень середньодобової
+    температури над біологічним мінімумом (задається вами).
+  ГТК Селянінова = ΣR / (0,1·Σt), де ΣR — сума опадів, мм, Σt — сума
+    активних температур вище 10 °C за той самий період.
+    Облік активних температур:
+      декадний / місячний — за методичним посібником: до Σt входять лише
+        декади (місяці) із середньою t > 10 °C, опади — за весь період;
+        для декади без активних температур ГТК не розраховується;
+      добовий — лише доби з t > 10 °C (і опади лише цих діб).
+    Шкала: < 0,4 дуже сильна посуха; 0,4–0,5 сильна; 0,6–0,7 середня;
+    0,8–0,9 слабка; 1,0–1,5 достатньо волого; > 1,5 надмірно волого
+    (за значенням, округленим до 0,1). Джерело: Польовий А.М. та ін.
+    «Основи агрометеорології», Одеса, 2004.
+
+ВКЛАДКИ
+  Підсумок · Добові дані · Декади · Місяці · За роками (+ норма й
+  відхилення) · Періоди (довільні, напр. між замірами журналу) · Графіки ·
+  Для публікації (методика, цитування, примітки).
+
+НОРМА Й ВІДХИЛЕННЯ
+  На вкладці «За роками» вкажіть роки норми (стандарт WMO — 1991–2020) і
+  натисніть «Завантажити норму»: програма порахує середнє за ці роки для
+  вашого вікна (напр. 01.04–31.10) і покаже відхилення кожного року.
+  Для Open-Meteo це ≈ 400–500 викликів із добового ліміту — програма
+  попередить.
+
+ПЕРІОДИ КОРИСТУВАЧА
+  Довільні відрізки (фенофази, інтервали між замірами). «З серії журналу»
+  бере дати замірів і рахує погоду між ними — для пояснення динаміки
+  повторних вимірювань.
+
+ЕКСПОРТ
+  Excel (числа лишаються числами, ГТК розфарбовано) · Word (таблиці,
+  рисунки, методика, подяка) · CSV добових даних · «погодний набір» (.sadw)
+  для передачі в аналізи.
+
+ПОГОДА В АНАЛІЗАХ — ЗАСТЕРЕЖЕННЯ
+  Погодний показник року однаковий для всіх ділянок цього року, тож він
+  змішується з ефектом «рік». Якщо дослід щороку на тих самих
+  ділянках/деревах, спостереження залежні — ANCOVA з погодою некоректна
+  (використовуйте змішаний RM і описову таблицю). Для кореляції року з
+  погодою потрібно не менше ~8 років: на 3 роках зв'язок не оцінити.
+"""
+
+    # ═══════════════════════════════════════════════════════════
+    def __init__(self, parent, gs=None):
+        self.parent = parent
+        self.win = tk.Toplevel(parent)
+        self.win.title("Погода — метеодані та агрокліматичні показники")
+        self.win.geometry("1340x840"); set_icon(self.win)
+        self.series = None; self.rep = None; self.norm = None; self.periods = []
+        self.ctx = {"place": "", "lat": None, "lon": None, "source": "nasa"}
+        self._q = queue.Queue(); self._busy = False; self._alive = True
+        self._fig = None; self._canvas = None
+        self._build()
+        self.win.protocol("WM_DELETE_WINDOW", self._close)
+        self.win.after(150, self._poll)
+
+    def _close(self):
+        self._alive = False
+        try: self.win.destroy()
+        except Exception: pass
+
+    # ───────────────────────────────────────────────────────────
+    # Побудова інтерфейсу
+    # ───────────────────────────────────────────────────────────
+    def _build(self):
+        top = tk.Frame(self.win, padx=8, pady=6); top.pack(fill=tk.X)
+        self.btn_fetch = tk.Button(top, text="▶ Отримати дані", bg="#c62828", fg="white",
+                                   font=("Times New Roman", 13), command=self._start_fetch)
+        self.btn_fetch.pack(side=tk.LEFT, padx=4)
+        for txt, cmd in (("📊 Excel", self._export_xlsx), ("📄 Word", self._export_docx),
+                         ("🧾 CSV добових", self._export_csv), ("📤 Погодний набір", self._export_set)):
+            tk.Button(top, text=txt, font=RF, command=cmd).pack(side=tk.LEFT, padx=3)
+        tk.Button(top, text="📚 Довідка", bg="#1a4b8c", fg="white", font=RF,
+                  command=self._show_help).pack(side=tk.LEFT, padx=8)
+        self.comma_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(top, text="Десяткова кома (таблиці, Word, CSV, буфер)", variable=self.comma_var,
+                       font=("Times New Roman", 10), command=self._refresh_all).pack(side=tk.RIGHT, padx=6)
+
+        body = tk.Frame(self.win); body.pack(fill=tk.BOTH, expand=True)
+        left = tk.Frame(body, width=420, padx=8); left.pack(side=tk.LEFT, fill=tk.Y)
+        left.pack_propagate(False)
+        right = tk.Frame(body); right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+        self._build_left(left)
+        self._build_tabs(right)
+
+        self.status_var = tk.StringVar(value="Оберіть джерело, місце й період, потім «Отримати дані».")
+        bar = tk.Frame(self.win, padx=8, pady=3); bar.pack(fill=tk.X, side=tk.BOTTOM)
+        self.progress = ttk.Progressbar(bar, mode="indeterminate", length=140)
+        self.progress.pack(side=tk.LEFT)
+        tk.Label(bar, textvariable=self.status_var, font=("Times New Roman", 10), fg="#1a4b8c",
+                 anchor="w", justify="left").pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
+
+    def _lf(self, parent, text):
+        f = tk.LabelFrame(parent, text=text, font=RB, padx=6, pady=4)
+        f.pack(fill=tk.X, pady=(0, 5)); return f
+
+    def _build_left(self, left):
+        # ── Джерело ──
+        f = self._lf(left, "1. Джерело даних")
+        self._src_titles = {W.SOURCE_TITLES[k]: k for k in ("nasa", "openmeteo", "file")}
+        self.src_var = tk.StringVar(value=W.SOURCE_TITLES["nasa"])
+        cb = ttk.Combobox(f, textvariable=self.src_var, values=list(self._src_titles), state="readonly", width=50)
+        cb.pack(fill=tk.X); cb.bind("<<ComboboxSelected>>", lambda e: self._on_source())
+        self.model_row = tk.Frame(f)
+        tk.Label(self.model_row, text="Модель:", font=("Times New Roman", 10)).pack(side=tk.LEFT)
+        self.model_var = tk.StringVar(value=W.OM_MODELS["era5"])
+        self._model_titles = {v: k for k, v in W.OM_MODELS.items()}
+        ttk.Combobox(self.model_row, textvariable=self.model_var, values=list(self._model_titles),
+                     state="readonly", width=34).pack(side=tk.LEFT, padx=4)
+        self.file_row = tk.Frame(f)
+        tk.Button(self.file_row, text="📂 Відкрити файл…", font=RF, command=self._open_file).pack(side=tk.LEFT)
+        tk.Button(self.file_row, text="📋 З буфера", font=RF, command=self._paste_table).pack(side=tk.LEFT, padx=4)
+        self.lic_lbl = tk.Label(f, text="", font=("Times New Roman", 9), fg="#8c5a1a",
+                                justify="left", wraplength=390)
+        self.lic_lbl.pack(anchor="w", pady=(4, 0))
+
+        # ── Місце ──
+        f = self._lf(left, "2. Місце досліду")
+        g = tk.Frame(f); g.pack(fill=tk.X)
+        tk.Label(g, text="Назва:", font=RF).grid(row=0, column=0, sticky="w")
+        self.place_var = tk.StringVar()
+        tk.Entry(g, textvariable=self.place_var, font=RF, width=30).grid(row=0, column=1, columnspan=2, sticky="we", pady=1)
+        tk.Label(g, text="Швидкий вибір:", font=("Times New Roman", 10)).grid(row=1, column=0, sticky="w")
+        self.preset_var = tk.StringVar(value="— обрати —")
+        pc = ttk.Combobox(g, textvariable=self.preset_var, values=sorted(W.PRESET_PLACES), state="readonly", width=16)
+        pc.grid(row=1, column=1, sticky="w", pady=1); pc.bind("<<ComboboxSelected>>", lambda e: self._on_preset())
+        tk.Button(g, text="🔍 Знайти за назвою…", font=("Times New Roman", 10), command=self._geocode_dlg
+                  ).grid(row=2, column=1, columnspan=2, sticky="w", pady=2)
+        tk.Label(g, text="Широта, °N:", font=RF).grid(row=3, column=0, sticky="w")
+        self.lat_var = tk.StringVar(value="48.7484")
+        tk.Entry(g, textvariable=self.lat_var, font=RF, width=14).grid(row=3, column=1, sticky="w", pady=1)
+        tk.Label(g, text="Довгота, °E:", font=RF).grid(row=4, column=0, sticky="w")
+        self.lon_var = tk.StringVar(value="30.2218")
+        tk.Entry(g, textvariable=self.lon_var, font=RF, width=14).grid(row=4, column=1, sticky="w", pady=1)
+        tk.Label(f, text="Градуси (48.75 або 48,75) чи ГМС (48°45'N). Точніші координати ділянки "
+                         "дають точнішу комірку сітки.",
+                 font=("Times New Roman", 9), fg="#666", justify="left", wraplength=390).pack(anchor="w")
+
+        # ── Період ──
+        f = self._lf(left, "3. Період")
+        g = tk.Frame(f); g.pack(fill=tk.X)
+        today = _dt.date.today()
+        tk.Label(g, text="Від:", font=RF).grid(row=0, column=0, sticky="w")
+        self.d0_var = tk.StringVar(value=f"01.01.{today.year - 1}")
+        e0 = tk.Entry(g, textvariable=self.d0_var, font=RF, width=12); e0.grid(row=0, column=1, padx=4)
+        tk.Label(g, text="до:", font=RF).grid(row=0, column=2, sticky="w")
+        self.d1_var = tk.StringVar(value=f"31.12.{today.year - 1}")
+        e1 = tk.Entry(g, textvariable=self.d1_var, font=RF, width=12); e1.grid(row=0, column=3, padx=4)
+        for e in (e0, e1): e.bind("<KeyRelease>", lambda ev: self._update_cost())
+        b = tk.Frame(f); b.pack(fill=tk.X, pady=(3, 0))
+        tk.Button(b, text="Сезон(и)…", font=("Times New Roman", 10), command=lambda: self._years_dlg(True)).pack(side=tk.LEFT)
+        tk.Button(b, text="Календарні роки…", font=("Times New Roman", 10),
+                  command=lambda: self._years_dlg(False)).pack(side=tk.LEFT, padx=4)
+        self.cost_lbl = tk.Label(f, text="", font=("Times New Roman", 9), fg="#666", justify="left", wraplength=390)
+        self.cost_lbl.pack(anchor="w")
+
+        # ── Розрахунок ──
+        f = self._lf(left, "4. Параметри розрахунку")
+        g = tk.Frame(f); g.pack(fill=tk.X)
+        self.base_var = tk.StringVar(value="10"); self.upper_var = tk.StringVar(value="")
+        self.frost_var = tk.StringVar(value="0")
+        self.wfrom_var = tk.StringVar(value="04-01"); self.wto_var = tk.StringVar(value="10-31")
+        tk.Label(g, text="Біол. мінімум для СЕТ, °C:", font=RF).grid(row=0, column=0, sticky="w")
+        tk.Entry(g, textvariable=self.base_var, font=RF, width=6).grid(row=0, column=1, sticky="w", padx=4)
+        tk.Label(g, text="Верхня межа t для СЕТ (необов.):", font=("Times New Roman", 10)).grid(row=1, column=0, sticky="w")
+        tk.Entry(g, textvariable=self.upper_var, font=RF, width=6).grid(row=1, column=1, sticky="w", padx=4)
+        tk.Label(g, text="Заморозок: tmin нижче, °C:", font=RF).grid(row=2, column=0, sticky="w")
+        tk.Entry(g, textvariable=self.frost_var, font=RF, width=6).grid(row=2, column=1, sticky="w", padx=4)
+        tk.Label(f, text="Облік активних температур у ГТК:", font=RF).pack(anchor="w", pady=(4, 0))
+        self.htc_var = tk.StringVar(value=list(HTC_METHODS)[0])
+        ttk.Combobox(f, textvariable=self.htc_var, values=list(HTC_METHODS), state="readonly", width=50).pack(fill=tk.X)
+        g2 = tk.Frame(f); g2.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(g2, text="Вікно для порівняння років (ММ-ДД):", font=RF).grid(row=0, column=0, columnspan=3, sticky="w")
+        tk.Entry(g2, textvariable=self.wfrom_var, font=RF, width=7).grid(row=1, column=0, sticky="w")
+        tk.Label(g2, text="—", font=RF).grid(row=1, column=1)
+        tk.Entry(g2, textvariable=self.wto_var, font=RF, width=7).grid(row=1, column=2, sticky="w")
+        tk.Button(g2, text="↻ Перерахувати з новими параметрами", font=RF, command=self._recompute
+                  ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
+        f = self._lf(left, "5. Кеш")
+        self.nocache_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(f, text="Ігнорувати кеш (завантажити заново)", variable=self.nocache_var,
+                       font=("Times New Roman", 10)).pack(anchor="w")
+        self._on_source()
+
+    def _build_tabs(self, right):
+        self.nb = ttk.Notebook(right); self.nb.pack(fill=tk.BOTH, expand=True)
+        # Підсумок
+        self.tab_sum = tk.Frame(self.nb); self.nb.add(self.tab_sum, text="Підсумок")
+        self.txt_sum = ScrolledText(self.tab_sum, wrap="word", font=("Times New Roman", 12), relief=tk.FLAT)
+        self.txt_sum.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        self.txt_sum.tag_configure("h", font=("Times New Roman", 14, "bold"), foreground="#1a4b8c")
+        self.txt_sum.tag_configure("b", font=("Times New Roman", 12, "bold"))
+        self.txt_sum.tag_configure("w", foreground="#8c5a1a")
+        self.txt_sum.tag_configure("g", foreground="#666")
+        self._set_text(self.txt_sum, "Дані ще не завантажено.")
+        # Добові
+        self.tab_day = tk.Frame(self.nb); self.nb.add(self.tab_day, text="Добові дані")
+        self.day_holder = tk.Frame(self.tab_day); self.day_holder.pack(fill=tk.BOTH, expand=True)
+        # Таблиці
+        self.holders = {}
+        for key, title in (("decades", "Декади"), ("months", "Місяці")):
+            tab = tk.Frame(self.nb); self.nb.add(tab, text=title)
+            bar = tk.Frame(tab, pady=4); bar.pack(fill=tk.X)
+            tk.Button(bar, text="📋 Копіювати таблицю", font=RF,
+                      command=lambda k=key: self._copy_table(k)).pack(side=tk.LEFT, padx=6)
+            tk.Label(bar, text="Колір ГТК: сині/зелені — достатньо чи надмірно волого; жовті/червоні — посуха.",
+                     font=("Times New Roman", 9), fg="#666").pack(side=tk.LEFT, padx=6)
+            holder = tk.Frame(tab); holder.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+            self.holders[key] = holder
+        # За роками
+        self.tab_years = tk.Frame(self.nb); self.nb.add(self.tab_years, text="За роками")
+        bar = tk.Frame(self.tab_years, pady=4); bar.pack(fill=tk.X)
+        tk.Button(bar, text="📋 Копіювати", font=RF, command=lambda: self._copy_table("years")).pack(side=tk.LEFT, padx=6)
+        tk.Label(bar, text="Норма за роки:", font=RF).pack(side=tk.LEFT, padx=(14, 2))
+        self.ny0 = tk.StringVar(value="1991"); self.ny1 = tk.StringVar(value="2020")
+        tk.Entry(bar, textvariable=self.ny0, font=RF, width=6).pack(side=tk.LEFT)
+        tk.Label(bar, text="—", font=RF).pack(side=tk.LEFT)
+        tk.Entry(bar, textvariable=self.ny1, font=RF, width=6).pack(side=tk.LEFT)
+        tk.Button(bar, text="⬇ Завантажити норму", font=RF, command=self._load_norm).pack(side=tk.LEFT, padx=6)
+        tk.Button(bar, text="✖ Прибрати норму", font=("Times New Roman", 10), command=self._clear_norm).pack(side=tk.LEFT)
+        self.years_note = tk.Label(self.tab_years, text="", font=("Times New Roman", 10), fg="#8c5a1a",
+                                   justify="left", wraplength=900, anchor="w")
+        self.years_note.pack(fill=tk.X, padx=8)
+        self.holders["years"] = tk.Frame(self.tab_years)
+        self.holders["years"].pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+        # Періоди
+        self.tab_per = tk.Frame(self.nb); self.nb.add(self.tab_per, text="Періоди")
+        bar = tk.Frame(self.tab_per, pady=4); bar.pack(fill=tk.X)
+        for txt, cmd in (("➕ Додати…", self._period_add), ("🗑 Видалити", self._period_del),
+                         ("📅 За датами замірів…", self._period_from_dates),
+                         ("📂 З серії журналу…", self._period_from_series),
+                         ("Очистити", self._period_clear), ("📋 Копіювати", lambda: self._copy_table("periods"))):
+            tk.Button(bar, text=txt, font=("Times New Roman", 10), command=cmd).pack(side=tk.LEFT, padx=3)
+        self.per_list = tk.Listbox(self.tab_per, height=5, font=RF, exportselection=False)
+        self.per_list.pack(fill=tk.X, padx=8)
+        self.holders["periods"] = tk.Frame(self.tab_per)
+        self.holders["periods"].pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        # Графіки
+        self.tab_ch = tk.Frame(self.nb); self.nb.add(self.tab_ch, text="Графіки")
+        bar = tk.Frame(self.tab_ch, pady=4); bar.pack(fill=tk.X)
+        self._chart_titles = {t: k for k, t in CH.CHARTS}
+        self.chart_var = tk.StringVar(value=CH.CHARTS[0][1])
+        cc = ttk.Combobox(bar, textvariable=self.chart_var, values=[t for _, t in CH.CHARTS], state="readonly", width=50)
+        cc.pack(side=tk.LEFT, padx=6); cc.bind("<<ComboboxSelected>>", lambda e: self._draw_chart())
+        tk.Button(bar, text="💾 Зберегти (PNG/SVG/PDF)…", font=RF, command=self._save_chart).pack(side=tk.LEFT, padx=4)
+        tk.Button(bar, text="📋 Копіювати", font=RF, command=self._copy_chart).pack(side=tk.LEFT)
+        self.chart_holder = tk.Frame(self.tab_ch); self.chart_holder.pack(fill=tk.BOTH, expand=True)
+        # Для публікації
+        self.tab_pub = tk.Frame(self.nb); self.nb.add(self.tab_pub, text="Для публікації")
+        bar = tk.Frame(self.tab_pub, pady=4); bar.pack(fill=tk.X)
+        tk.Button(bar, text="📋 Копіювати текст", font=RF, command=self._copy_pub).pack(side=tk.LEFT, padx=6)
+        tk.Button(bar, text="💾 Зберегти .txt", font=RF, command=self._save_pub).pack(side=tk.LEFT)
+        tk.Label(bar, text="Це чернетка для копіювання; експорт у Word формує текст заново з поточних налаштувань.",
+                 font=("Times New Roman", 9), fg="#666").pack(side=tk.LEFT, padx=10)
+        self.txt_pub = ScrolledText(self.tab_pub, wrap="word", font=("Times New Roman", 12))
+        self.txt_pub.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+
+    # ───────────────────────────────────────────────────────────
+    # Допоміжні
+    # ───────────────────────────────────────────────────────────
+    @staticmethod
+    def _set_text(widget, text, tag=None):
+        widget.configure(state="normal"); widget.delete("1.0", tk.END)
+        widget.insert("1.0", text, tag) if tag else widget.insert("1.0", text)
+
+    def _src_key(self): return self._src_titles.get(self.src_var.get(), "nasa")
+    def _model_key(self): return self._model_titles.get(self.model_var.get(), "era5")
+
+    def _on_source(self):
+        s = self._src_key()
+        self.lic_lbl.configure(text=W.licence_notice(s) or
+                               "Власні дані: програма не змінює значення; одиниці — °C, мм, %, м/с, МДж/м².")
+        if s == "openmeteo": self.model_row.pack(fill=tk.X, pady=(3, 0))
+        else: self.model_row.pack_forget()
+        if s == "file": self.file_row.pack(fill=tk.X, pady=(3, 0))
+        else: self.file_row.pack_forget()
+        self.btn_fetch.configure(text="▶ Отримати дані" if s != "file" else "▶ Відкрити файл…")
+        self._update_cost()
+
+    def _on_preset(self):
+        name = self.preset_var.get()
+        if name in W.PRESET_PLACES:
+            lat, lon = W.PRESET_PLACES[name]
+            self.lat_var.set(f"{lat:.4f}"); self.lon_var.set(f"{lon:.4f}")
+            if not self.place_var.get().strip(): self.place_var.set(f"м. {name}")
+
+    def _dates(self):
+        d0 = W.parse_date(self.d0_var.get()); d1 = W.parse_date(self.d1_var.get())
+        if d0 > d1: raise ValueError("Початок періоду пізніший за кінець.")
+        return d0, d1
+
+    def _update_cost(self):
+        if self._src_key() != "openmeteo":
+            self.cost_lbl.configure(text=""); return
+        try:
+            d0, d1 = self._dates()
+            calls = sum(W.estimate_om_calls((b - a).days + 1) for a, b in W._year_chunks(d0, d1))
+            self.cost_lbl.configure(text=f"Open-Meteo: цей запит ≈ {calls:.0f} із 10 000 викликів на добу.")
+        except Exception:
+            self.cost_lbl.configure(text="")
+
+    def _years_dlg(self, season):
+        dlg = tk.Toplevel(self.win); dlg.title("Сезон(и)" if season else "Календарні роки")
+        set_icon(dlg); dlg.grab_set(); dlg.resizable(False, False)
+        f = tk.Frame(dlg, padx=14, pady=12); f.pack()
+        y = _dt.date.today().year - 1
+        y0v, y1v = tk.StringVar(value=str(y)), tk.StringVar(value=str(y))
+        tk.Label(f, text="Роки: від", font=RF).grid(row=0, column=0)
+        tk.Entry(f, textvariable=y0v, width=7, font=RF).grid(row=0, column=1, padx=4)
+        tk.Label(f, text="до", font=RF).grid(row=0, column=2)
+        tk.Entry(f, textvariable=y1v, width=7, font=RF).grid(row=0, column=3, padx=4)
+        wf, wt = tk.StringVar(value=self.wfrom_var.get()), tk.StringVar(value=self.wto_var.get())
+        if season:
+            tk.Label(f, text="Вегетація (ММ-ДД):", font=RF).grid(row=1, column=0, pady=(8, 0))
+            tk.Entry(f, textvariable=wf, width=7, font=RF).grid(row=1, column=1, pady=(8, 0))
+            tk.Label(f, text="—", font=RF).grid(row=1, column=2, pady=(8, 0))
+            tk.Entry(f, textvariable=wt, width=7, font=RF).grid(row=1, column=3, pady=(8, 0))
+            tk.Label(f, text="Вікно запам'ятається й для таблиці «За роками».", font=("Times New Roman", 9),
+                     fg="#666").grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
+
+        def ok():
+            try:
+                a, b = int(y0v.get()), int(y1v.get())
+                if a > b: raise ValueError("Рік «від» більший за «до».")
+                if season:
+                    m1, d1 = parse_md(wf.get()); m2, d2 = parse_md(wt.get())
+                    d_start = W.window_for_year(a, m1, d1, m2, d2)[0]
+                    d_end = W.window_for_year(b, m1, d1, m2, d2)[1]
+                    self.wfrom_var.set(f"{m1:02d}-{d1:02d}"); self.wto_var.set(f"{m2:02d}-{d2:02d}")
+                else:
+                    d_start, d_end = _dt.date(a, 1, 1), _dt.date(b, 12, 31)
+            except ValueError as e:
+                messagebox.showwarning("", str(e), parent=dlg); return
+            self.d0_var.set(d_start.strftime("%d.%m.%Y")); self.d1_var.set(d_end.strftime("%d.%m.%Y"))
+            self._update_cost(); dlg.destroy()
+        tk.Button(f, text="OK", font=RF, bg="#1a6b1a", fg="white", command=ok).grid(row=3, column=0, columnspan=4, pady=(10, 0))
+        center_win(dlg)
+
+    def _geocode_dlg(self):
+        dlg = tk.Toplevel(self.win); dlg.title("Пошук місця за назвою"); set_icon(dlg); dlg.grab_set()
+        f = tk.Frame(dlg, padx=12, pady=10); f.pack()
+        tk.Label(f, text="Назва населеного пункту (сервіс Open-Meteo Geocoding; умови — некомерційне використання):",
+                 font=("Times New Roman", 9), fg="#8c5a1a", wraplength=420, justify="left").pack(anchor="w")
+        nv = tk.StringVar(value=self.place_var.get().replace("м. ", ""))
+        row = tk.Frame(f); row.pack(fill=tk.X, pady=4)
+        ent = tk.Entry(row, textvariable=nv, font=RF, width=32); ent.pack(side=tk.LEFT)
+        lb = tk.Listbox(f, height=7, width=62, font=RF, exportselection=False); lb.pack(pady=4)
+        found = []
+
+        def search(*_):
+            name = nv.get().strip()
+            if not name: return
+            dlg.configure(cursor="watch"); dlg.update_idletasks()
+            try:
+                res = W.geocode(name, getter=lambda u: W.http_get(u, timeout=12))   # не підвішувати вікно надовго
+            except W.WeatherError as e:
+                messagebox.showwarning("", str(e), parent=dlg); res = []
+            dlg.configure(cursor="")
+            found[:] = res; lb.delete(0, tk.END)
+            for r in res:
+                lb.insert(tk.END, f"{r['label']}   ({r['lat']:.4f}, {r['lon']:.4f})")
+            if not res: lb.insert(tk.END, "Нічого не знайдено")
+
+        def pick(*_):
+            sel = lb.curselection()
+            if not sel or sel[0] >= len(found): return
+            r = found[sel[0]]
+            self.lat_var.set(f"{r['lat']:.4f}"); self.lon_var.set(f"{r['lon']:.4f}")
+            if not self.place_var.get().strip(): self.place_var.set(r["label"])
+            dlg.destroy()
+        tk.Button(row, text="Знайти", font=RF, command=search).pack(side=tk.LEFT, padx=6)
+        tk.Button(f, text="Обрати", font=RF, bg="#1a6b1a", fg="white", command=pick).pack()
+        ent.bind("<Return>", search); lb.bind("<Double-Button-1>", pick)
+        center_win(dlg); ent.focus_set()
+
+    # ───────────────────────────────────────────────────────────
+    # Налаштування й коордиати
+    # ───────────────────────────────────────────────────────────
+    def _read_settings(self):
+        def fl(var, name):
+            try: return float(str(var.get()).replace(",", "."))
+            except ValueError: raise ValueError(f"«{name}»: потрібне число")
+        base = fl(self.base_var, "Біологічний мінімум")
+        up_txt = self.upper_var.get().strip()
+        upper = fl(self.upper_var, "Верхня межа") if up_txt else None
+        if upper is not None and upper <= base: raise ValueError("Верхня межа має бути вищою за біологічний мінімум.")
+        frost = fl(self.frost_var, "Поріг заморозку")
+        m1, d1 = parse_md(self.wfrom_var.get()); m2, d2 = parse_md(self.wto_var.get())
+        st = W.default_settings()
+        st.update(gdd_base=base, gdd_upper=upper, frost_thr=frost, window=(m1, d1, m2, d2),
+                  htc_method=HTC_METHODS[self.htc_var.get()])
+        return st
+
+    def _coords(self, required):
+        lt, ln = self.lat_var.get().strip(), self.lon_var.get().strip()
+        if not lt and not ln and not required: return None, None
+        return W.parse_coord(lt, "lat"), W.parse_coord(ln, "lon")
+
+    # ───────────────────────────────────────────────────────────
+    # Отримання даних (фоновий потік)
+    # ───────────────────────────────────────────────────────────
+    def _busy_on(self, msg):
+        self._busy = True; self.btn_fetch.configure(state="disabled")
+        self.progress.start(12); self.status_var.set(msg)
+
+    def _busy_off(self):
+        self._busy = False; self.btn_fetch.configure(state="normal"); self.progress.stop()
+
+    def _start_fetch(self):
+        if self._busy: return
+        src = self._src_key()
+        if src == "file":
+            self._open_file(); return
+        try:
+            lat, lon = self._coords(True)
+            d0, d1 = self._dates()
+            self._read_settings()
+        except ValueError as e:
+            messagebox.showwarning("Перевірте параметри", str(e), parent=self.win); return
+        today = _dt.date.today()
+        if d1 > today:
+            d1 = today; self.d1_var.set(d1.strftime("%d.%m.%Y"))
+            messagebox.showinfo("", "Кінець періоду пізніший за сьогодні — скорочено до сьогоднішньої дати.", parent=self.win)
+        if d0 < W.SOURCE_MIN_DATE[src]:
+            messagebox.showwarning("", f"Це джерело має дані з {W.SOURCE_MIN_DATE[src]:%d.%m.%Y}. "
+                                       f"Змініть початок періоду.", parent=self.win); return
+        if d0 > d1:
+            messagebox.showwarning("", "Початок періоду пізніший за кінець.", parent=self.win); return
+        if src == "openmeteo":
+            calls = sum(W.estimate_om_calls((b - a).days + 1) for a, b in W._year_chunks(d0, d1))
+            if calls > 800 and not messagebox.askyesno(
+                    "Великий запит", f"Цей запит коштуватиме ≈ {calls:.0f} із 10 000 безкоштовних викликів "
+                                     f"Open-Meteo на добу. Продовжити?", parent=self.win):
+                return
+        self.ctx = {"place": self.place_var.get().strip(), "lat": lat, "lon": lon, "source": src}
+        model, use_cache = self._model_key(), not self.nocache_var.get()
+        self._busy_on("Підключення до сервера…")
+        threading.Thread(target=self._fetch_worker, args=(src, lat, lon, d0, d1, model, use_cache), daemon=True).start()
+
+    def _fetch_worker(self, src, lat, lon, d0, d1, model, use_cache):
+        prog = lambda m: self._q.put(("progress", m))
+        try:
+            if src == "nasa": ser = W.fetch_nasa(lat, lon, d0, d1, progress=prog, use_cache=use_cache)
+            else: ser = W.fetch_openmeteo(lat, lon, d0, d1, model=model, progress=prog, use_cache=use_cache)
+            self._q.put(("done", (ser, d0, d1)))
+        except W.WeatherError as e:
+            self._q.put(("error", str(e)))
+        except Exception as e:
+            self._q.put(("error", f"Непередбачена помилка: {e}"))
+
+    def _poll(self):
+        if not self._alive: return
+        try:
+            while True:
+                kind, payload = self._q.get_nowait()
+                if kind == "progress": self.status_var.set(payload)
+                elif kind == "done":
+                    self._busy_off(); self._on_fetched(*payload)
+                elif kind == "norm":
+                    self._busy_off(); self._on_norm(*payload)
+                elif kind == "error":
+                    self._busy_off(); self.status_var.set("Помилка.")
+                    messagebox.showerror("Помилка отримання даних", payload, parent=self.win)
+        except queue.Empty:
+            pass
+        except Exception as e:
+            self._busy_off(); self.status_var.set(f"Помилка: {e}")
+        if self._alive:
+            self.win.after(150, self._poll)
+
+    def _on_fetched(self, ser, d0, d1):
+        if len(ser) == 0:
+            messagebox.showwarning("", "Джерело не повернуло жодної доби за цей період.", parent=self.win); return
+        self.series = ser; self.norm = None
+        self.status_var.set(f"Отримано {len(ser)} діб. Дата отримання даних: {X.fmt_stamp(ser.meta.get('retrieved_at'))}")
+        self._recompute(select_summary=True)
+
+    # ───────────────────────────────────────────────────────────
+    # Розрахунок і оновлення вкладок
+    # ───────────────────────────────────────────────────────────
+    def _recompute(self, select_summary=False):
+        if self.series is None:
+            messagebox.showinfo("", "Спершу отримайте дані.", parent=self.win); return
+        try:
+            st = self._read_settings()
+        except ValueError as e:
+            messagebox.showwarning("Перевірте параметри", str(e), parent=self.win); return
+        try:
+            self.rep = W.build_report(self.series, st, norm=self.norm, periods=self.periods)
+        except Exception as e:
+            messagebox.showerror("Помилка розрахунку", str(e), parent=self.win); return
+        self._refresh_all()
+        if select_summary: self.nb.select(self.tab_sum)
+
+    def _refresh_all(self):
+        if self.rep is None: return
+        self._fill_summary(); self._fill_daily()
+        for key, fn in (("decades", X.spec_decades), ("months", X.spec_months)):
+            self._fill_table(self.holders[key], fn(self.rep))
+        if self.rep["years"]:
+            self._fill_table(self.holders["years"], X.spec_years(self.rep))
+        else:
+            self._clear(self.holders["years"])
+        note = ""
+        if self.rep["years_skipped"]:
+            note = ("Не включено (вікно покрито частково): " + ", ".join(str(y) for y, _, _ in self.rep["years_skipped"]) + ". ")
+        if not self.rep["years"]:
+            note += "Немає жодного року з повним покриттям вікна — змініть вікно ММ-ДД ліворуч або період."
+        if self.norm: note += f"Норма: {self.norm[2]} ({len(self.norm[1])} р.)."
+        self.years_note.configure(text=note)
+        self.per_list.delete(0, tk.END)
+        for n, a, b in self.periods: self.per_list.insert(tk.END, f"{n}:  {a:%d.%m.%Y} – {b:%d.%m.%Y}")
+        if self.rep["periods"]: self._fill_table(self.holders["periods"], X.spec_periods(self.rep))
+        else: self._clear(self.holders["periods"])
+        self._draw_chart(); self._fill_pub()
+
+    @staticmethod
+    def _clear(holder):
+        for w in holder.winfo_children(): w.destroy()
+
+    SHORT_HDR = {"tmax сер., °C": "tmax, °C", "tmin сер., °C": "tmin, °C", "Діб з опадами ≥1 мм": "Діб ≥1 мм",
+                 "Умови зволоження": "Умови", "Пропуски опадів, %": "Пропуски оп., %", "Діб із заморозком": "Заморозк. діб"}
+
+    def _fill_table(self, holder, spec):
+        self._clear(holder)
+        comma = self.comma_var.get()
+        headers, rows, classes = X.to_strings(spec, comma, compact=False)
+        headers = [self.SHORT_HDR.get(h, h) for h in headers]       # на екрані коротше; в експорті — точні назви
+        frm, tv = make_tv(holder, headers, rows, min_col=40)
+        frm.pack(fill=tk.BOTH, expand=True)
+        fnt = tkfont.Font(family="Times New Roman", size=11)          # ущільнення: ширина за вмістом,
+        for i, h in enumerate(headers):                               # остання колонка (умови) розтягується
+            wmax = max([fnt.measure(h) + 16] + [fnt.measure(str(r[i])) + 14 for r in rows[:300] if i < len(r)])
+            tv.column(h, width=max(44, wmax), minwidth=40, stretch=(i == len(headers) - 1))
+        for k, bg in HTC_BG.items(): tv.tag_configure(k, background=bg)
+        if classes:
+            for iid, cls in zip(tv.get_children(), classes):
+                if cls in HTC_BG: tv.item(iid, tags=(cls,))
+
+    def _fill_daily(self):
+        self._clear(self.day_holder)
+        comma = self.comma_var.get()
+        headers, rows, nds = X.daily_table(self.series, self.rep["settings"]["gdd_base"])
+        frm = tk.Frame(self.day_holder, bd=1, relief=tk.SUNKEN); frm.pack(fill=tk.BOTH, expand=True)
+        vsb = ttk.Scrollbar(frm, orient="vertical"); hsb = ttk.Scrollbar(frm, orient="horizontal")
+        tv = ttk.Treeview(frm, columns=headers, show="headings", yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.config(command=tv.yview); hsb.config(command=tv.xview)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y); hsb.pack(side=tk.BOTTOM, fill=tk.X); tv.pack(fill=tk.BOTH, expand=True)
+        for i, h in enumerate(headers):
+            tv.heading(h, text=h); tv.column(h, width=92 if i == 0 else max(80, min(150, len(h) * 8)), anchor="center")
+        for r in rows:
+            vals = [f"{r[0]:%d.%m.%Y}"] + [X.fnum(v, nd, comma, dash="") for v, nd in zip(r[1:], nds[1:])]
+            tv.insert("", "end", values=vals)
+
+    def _fill_summary(self):
+        rep = self.rep; ctx = self.ctx; s = self.series
+        w = self.txt_sum; w.configure(state="normal"); w.delete("1.0", tk.END)
+        w.insert(tk.END, f"{ctx['place'] or 'Метеодані'}\n", "h")
+        for a, b in X.make_meta(rep, ctx["place"], ctx["lat"], ctx["lon"], ctx["source"]):
+            w.insert(tk.END, f"{a}: ", "b"); w.insert(tk.END, f"{b}\n")
+        notes = W.quality_notes(s, ctx["source"], rep["d0"], rep["d1"])
+        if notes:
+            w.insert(tk.END, "\nЗвернуть увагу\n", "b")
+            for n in notes: w.insert(tk.END, f"• {n}\n", "w")
+        w.insert(tk.END, "\nЗведені показники за весь період\n", "b")
+        _, rows, _ = X.to_strings(X.spec_total(rep), self.comma_var.get())
+        wd = max(len(r[0]) for r in rows)
+        for a, b in rows: w.insert(tk.END, f"  {a}  —  {b}\n")
+        lab, key = W.htc_class(rep["total"]["htc"])
+        w.insert(tk.END, "\nШкала ГТК: ", "b"); w.insert(tk.END, W.HTC_SCALE_TEXT + "\n", "g")
+        w.configure(state="disabled")
+
+    # ───────────────────────────────────────────────────────────
+    # Норма й відхилення
+    # ───────────────────────────────────────────────────────────
+    def _clear_norm(self):
+        self.norm = None; self._recompute()
+
+    def _load_norm(self):
+        if self._busy: return
+        if self.series is None:
+            messagebox.showinfo("", "Спершу отримайте дані.", parent=self.win); return
+        try:
+            y0, y1 = int(self.ny0.get()), int(self.ny1.get())
+            st = self._read_settings()
+        except ValueError as e:
+            messagebox.showwarning("", f"Перевірте роки норми й параметри: {e}", parent=self.win); return
+        if y0 > y1 or y1 >= _dt.date.today().year:
+            messagebox.showwarning("", "Роки норми: «від» ≤ «до», і «до» — завершений рік.", parent=self.win); return
+        n = y1 - y0 + 1
+        if n < 10 and not messagebox.askyesno(
+                "Коротка норма", f"Кліматична норма зазвичай береться за 30 років (WMO: 1991–2020), а ви "
+                                 f"вказали {n}. Продовжити?", parent=self.win):
+            return
+        src = self.ctx["source"]; kw = W.stat_kwargs(st); window = st["window"]
+        if src == "file":                                  # норма з наявного ряду — без мережі
+            ok = {y: sub for y, _, _, sub in W.year_windows(self.series, window)[0] if y0 <= y <= y1}
+            self._on_norm(ok, y0, y1, kw); return
+        if src == "openmeteo":
+            days = (W.window_for_year(2001, *window)[1] - W.window_for_year(2001, *window)[0]).days + 1
+            calls = n * W.estimate_om_calls(days)
+            if not messagebox.askyesno("Запит норми", f"Норма за {n} років ≈ {calls:.0f} із 10 000 безкоштовних "
+                                                       f"викликів Open-Meteo на добу. Продовжити?", parent=self.win):
+                return
+        lat, lon, model = self.ctx["lat"], self.ctx["lon"], self._model_key()
+        use_cache = not self.nocache_var.get()
+        self._busy_on(f"Норма {y0}–{y1}…")
+        threading.Thread(target=self._norm_worker, args=(src, lat, lon, y0, y1, window, model, use_cache, kw),
+                         daemon=True).start()
+
+    def _norm_worker(self, src, lat, lon, y0, y1, window, model, use_cache, kw):
+        prog = lambda m: self._q.put(("progress", m))
+        per_year = {}; today = _dt.date.today(); n = y1 - y0 + 1
+        try:
+            for i, y in enumerate(range(y0, y1 + 1)):
+                a, b = W.window_for_year(y, *window)
+                if b >= today: continue
+                prog(f"Норма: {y} ({i + 1}/{n})…")
+                if src == "nasa": ser = W.fetch_nasa(lat, lon, a, b, use_cache=use_cache, progress=prog)
+                else: ser = W.fetch_openmeteo(lat, lon, a, b, model=model, use_cache=use_cache, progress=prog)
+                sub = ser.slice(a, b)
+                if len(sub) >= 0.95 * ((b - a).days + 1): per_year[y] = sub
+                time.sleep(0.5)                              # ввічлива пауза між запитами
+            self._q.put(("norm", (per_year, y0, y1, kw)))
+        except W.WeatherError as e:
+            self._q.put(("error", str(e)))
+        except Exception as e:
+            self._q.put(("error", f"Непередбачена помилка: {e}"))
+
+    def _on_norm(self, per_year, y0, y1, kw):
+        if len(per_year) < 3:
+            messagebox.showwarning("", f"Для норми вдалося зібрати лише {len(per_year)} повних років — замало.", parent=self.win)
+            return
+        nd, used = W.normal_from_years(per_year, **kw)
+        self.norm = (nd, used, f"{used[0]}–{used[-1]}")
+        self.status_var.set(f"Норму розраховано за {len(used)} років ({used[0]}–{used[-1]}).")
+        self._recompute(); self.nb.select(self.tab_years)
+
+    # ───────────────────────────────────────────────────────────
+    # Періоди користувача
+    # ───────────────────────────────────────────────────────────
+    def _period_add(self):
+        dlg = tk.Toplevel(self.win); dlg.title("Новий період"); set_icon(dlg); dlg.grab_set()
+        f = tk.Frame(dlg, padx=14, pady=10); f.pack()
+        nv, av, bv = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        for r, (lbl, var) in enumerate((("Назва (напр. «цвітіння»):", nv), ("Початок:", av), ("Кінець:", bv))):
+            tk.Label(f, text=lbl, font=RF).grid(row=r, column=0, sticky="w", pady=2)
+            tk.Entry(f, textvariable=var, font=RF, width=22).grid(row=r, column=1, pady=2, padx=6)
+
+        def ok():
+            try:
+                a, b = W.parse_date(av.get()), W.parse_date(bv.get())
+                if a > b: raise ValueError("Початок пізніший за кінець.")
+            except ValueError as e:
+                messagebox.showwarning("", str(e), parent=dlg); return
+            self.periods.append((nv.get().strip() or f"{a:%d.%m}–{b:%d.%m.%Y}", a, b))
+            dlg.destroy(); self._after_periods()
+        tk.Button(f, text="Додати", font=RF, bg="#1a6b1a", fg="white", command=ok).grid(row=3, column=0, columnspan=2, pady=8)
+        center_win(dlg)
+
+    def _period_del(self):
+        sel = self.per_list.curselection()
+        if not sel: return
+        del self.periods[sel[0]]; self._after_periods()
+
+    def _period_clear(self):
+        self.periods = []; self._after_periods()
+
+    def _after_periods(self):
+        if self.series is not None: self._recompute()
+        else:
+            self.per_list.delete(0, tk.END)
+            for n, a, b in self.periods: self.per_list.insert(tk.END, f"{n}:  {a:%d.%m.%Y} – {b:%d.%m.%Y}")
+
+    def _period_from_dates(self, preset_dates=None, season_default=None):
+        dlg = tk.Toplevel(self.win); dlg.title("Періоди за датами замірів"); set_icon(dlg); dlg.grab_set()
+        f = tk.Frame(dlg, padx=14, pady=10); f.pack()
+        tk.Label(f, text="Дати замірів (по одній у рядку чи через кому):", font=RF).pack(anchor="w")
+        tx = tk.Text(f, width=34, height=7, font=RF); tx.pack()
+        if preset_dates: tx.insert("1.0", "\n".join(d.strftime("%d.%m.%Y") for d in preset_dates))
+        row = tk.Frame(f); row.pack(fill=tk.X, pady=4)
+        tk.Label(row, text="Початок сезону:", font=RF).pack(side=tk.LEFT)
+        sv = tk.StringVar(value=season_default or (self.d0_var.get() if self.series is not None else ""))
+        tk.Entry(row, textvariable=sv, font=RF, width=12).pack(side=tk.LEFT, padx=6)
+        mode = tk.StringVar(value="between")
+        tk.Radiobutton(f, text="Між сусідніми замірами (погода, що діяла з попереднього заміру)", variable=mode,
+                       value="between", font=("Times New Roman", 10)).pack(anchor="w")
+        tk.Radiobutton(f, text="Нагромаджено від початку сезону до кожного заміру", variable=mode,
+                       value="cumulative", font=("Times New Roman", 10)).pack(anchor="w")
+
+        def ok():
+            try:
+                raw = re.split(r"[\n,;]+", tx.get("1.0", tk.END))
+                dates = [W.parse_date(x) for x in raw if x.strip()]
+                if not dates: raise ValueError("Вкажіть хоча б одну дату заміру.")
+                start = W.parse_date(sv.get()) if sv.get().strip() else None
+                new = W.intervals_from_dates(dates, start, mode.get())
+                if not new: raise ValueError("Не вдалося утворити жодного періоду — вкажіть початок сезону.")
+            except ValueError as e:
+                messagebox.showwarning("", str(e), parent=dlg); return
+            self.periods.extend(new); dlg.destroy(); self._after_periods()
+            self.nb.select(self.tab_per)
+        tk.Button(f, text="Створити періоди", font=RF, bg="#1a6b1a", fg="white", command=ok).pack(pady=6)
+        center_win(dlg)
+
+    def _period_from_series(self):
+        try:
+            from sad_journal_trial import _find_scheme_file_in_folder, pick_indicators_dialog
+        except Exception as e:
+            messagebox.showerror("", f"Модуль журналу недоступний: {e}", parent=self.win); return
+        path = filedialog.askopenfilename(parent=self.win, filetypes=[("SAD файл", "*.sadp"), ("JSON", "*.json")],
+                                          title="Оберіть файл схеми або журналу будь-якого року")
+        if not path: return
+        try:
+            with open(path, "r", encoding="utf-8") as fh: d = json.load(fh)
+            if d.get("type") == "field_journal": folder = os.path.dirname(os.path.dirname(path))
+            else: folder = os.path.dirname(path)
+            sch = _find_scheme_file_in_folder(folder)
+            series = {}
+            if sch:
+                with open(sch, "r", encoding="utf-8") as fh: series = json.load(fh).get("series", {})
+        except Exception as e:
+            messagebox.showerror("", f"Не вдалося прочитати файл: {e}", parent=self.win); return
+        if not series:
+            messagebox.showwarning("", "У цій схемі немає серій повторних вимірів.", parent=self.win); return
+        chosen = pick_indicators_dialog(self.win, {n: {} for n in sorted(series)}, multi_select=False)
+        if not chosen: return
+        try: dates = [W.parse_date(r["date"]) for r in series[chosen[0]]["rounds"]]
+        except Exception as e:
+            messagebox.showerror("", f"Некоректні дати серії: {e}", parent=self.win); return
+        self._period_from_dates(dates, season_default=None)
+
+    # ───────────────────────────────────────────────────────────
+    # Графіки
+    # ───────────────────────────────────────────────────────────
+    def _draw_chart(self):
+        self._clear(self.chart_holder); self._fig = None; self._canvas = None
+        if not HAS_MPL:
+            tk.Label(self.chart_holder, text="Встановіть matplotlib: pip install matplotlib").pack(pady=30); return
+        if self.rep is None:
+            tk.Label(self.chart_holder, text="Спершу отримайте дані.", fg="#666").pack(pady=30); return
+        self._fig = Figure(figsize=(9.2, 5.4), dpi=100)
+        CH.build_chart(self._fig, self._chart_titles[self.chart_var.get()], self.rep, self.ctx["place"])
+        self._canvas = FigureCanvasTkAgg(self._fig, master=self.chart_holder)
+        cw = self._canvas.get_tk_widget(); cw.configure(width=300, height=240)       # розмір визначає вікно, а не діаграма
+        cw.pack(fill=tk.BOTH, expand=True); self._canvas.draw_idle()
+
+    def _save_chart(self):
+        if self._fig is None:
+            messagebox.showinfo("", "Спершу побудуйте діаграму.", parent=self.win); return
+        p = filedialog.asksaveasfilename(parent=self.win, defaultextension=".png",
+                                         filetypes=[("PNG", "*.png"), ("SVG", "*.svg"), ("PDF", "*.pdf")])
+        if not p: return
+        cur = self._fig.get_size_inches().copy()
+        try:
+            self._fig.set_size_inches(9.2, 5.4)                       # зберігаємо в задуманому розмірі, а не в розмірі вікна
+            self._fig.savefig(p, dpi=300, bbox_inches="tight")
+        except Exception as e: messagebox.showerror("", str(e), parent=self.win); return
+        finally:
+            self._fig.set_size_inches(*cur); self._canvas.draw_idle()
+        self.status_var.set(f"Діаграму збережено: {p}")
+
+    def _copy_chart(self):
+        if self._fig is None:
+            messagebox.showinfo("", "Спершу побудуйте діаграму.", parent=self.win); return
+        ok, msg = _copy_fig_to_clipboard(self._fig)
+        if ok: messagebox.showinfo("", "Діаграму скопійовано.\nВставте у Word через Ctrl+V.", parent=self.win)
+        else: messagebox.showwarning("", f"Помилка: {msg}", parent=self.win)
+
+    # ───────────────────────────────────────────────────────────
+    # Текст для публікації й експорт
+    # ───────────────────────────────────────────────────────────
+    def _pub(self):
+        c = self.ctx
+        return X.publication_text(self.rep, c["place"], c["lat"], c["lon"], c["source"])
+
+    def _fill_pub(self):
+        self.txt_pub.delete("1.0", tk.END); self.txt_pub.insert("1.0", self._pub())
+
+    def _copy_pub(self):
+        if self.rep is None: return
+        self.win.clipboard_clear(); self.win.clipboard_append(self.txt_pub.get("1.0", tk.END))
+        self.status_var.set("Текст скопійовано в буфер.")
+
+    def _save_pub(self):
+        if self.rep is None: return
+        p = filedialog.asksaveasfilename(parent=self.win, defaultextension=".txt", filetypes=[("Текст", "*.txt")])
+        if p:
+            with open(p, "w", encoding="utf-8") as fh: fh.write(self.txt_pub.get("1.0", tk.END))
+
+    def _copy_table(self, key):
+        if self.rep is None:
+            messagebox.showinfo("", "Спершу отримайте дані.", parent=self.win); return
+        spec = {"decades": X.spec_decades, "months": X.spec_months, "years": X.spec_years,
+                "periods": X.spec_periods}[key](self.rep)
+        if spec["kind"] == "table" and not spec["rows"]:
+            messagebox.showinfo("", "У цій таблиці немає рядків.", parent=self.win); return
+        self.win.clipboard_clear(); self.win.clipboard_append(X.clipboard_text(spec, self.comma_var.get()))
+        self.status_var.set("Таблицю скопійовано — вставте в Word чи Excel (Ctrl+V).")
+
+    def _need(self):
+        if self.rep is None:
+            messagebox.showinfo("", "Спершу отримайте дані.", parent=self.win); return False
+        return True
+
+    def _default_name(self, ext):
+        p = re.sub(r"[^\w\-]+", "_", (self.ctx["place"] or "погода"), flags=re.U).strip("_")[:30] or "погода"
+        return f"погода_{p}_{self.rep['d0']:%Y%m%d}_{self.rep['d1']:%Y%m%d}.{ext}"
+
+    def _export_xlsx(self):
+        if not self._need(): return
+        if not HAS_OPENPYXL:
+            messagebox.showerror("", "Потрібен openpyxl: pip install openpyxl", parent=self.win); return
+        p = filedialog.asksaveasfilename(parent=self.win, defaultextension=".xlsx", initialfile=self._default_name("xlsx"),
+                                         filetypes=[("Excel", "*.xlsx")])
+        if not p: return
+        c = self.ctx
+        try:
+            X.export_xlsx(p, self.rep, X.make_meta(self.rep, c["place"], c["lat"], c["lon"], c["source"]), self._pub())
+        except Exception as e:
+            messagebox.showerror("Помилка експорту", str(e), parent=self.win); return
+        self.status_var.set(f"Excel збережено: {p}")
+        if messagebox.askyesno("", "Файл збережено. Відкрити?", parent=self.win): open_file_cross(p)
+
+    def _export_docx(self):
+        if not self._need(): return
+        if not X._have_docx():
+            messagebox.showerror("", "Для експорту у Word встановіть python-docx:\n  pip install python-docx", parent=self.win); return
+        p = filedialog.asksaveasfilename(parent=self.win, defaultextension=".docx", initialfile=self._default_name("docx"),
+                                         filetypes=[("Word", "*.docx")])
+        if not p: return
+        c = self.ctx; self.win.configure(cursor="watch"); self.win.update_idletasks()
+        try:
+            figs = []
+            names = dict(CH.CHARTS)
+            for kind in ("climo_decade", "walter", "htc_month", "years_cmp"):
+                png = X.figure_png(self.rep, kind, c["place"], CH.build_chart)
+                if png: figs.append((names[kind], png))
+            X.export_docx(p, self.rep, X.make_meta(self.rep, c["place"], c["lat"], c["lon"], c["source"]),
+                          self._pub(), figs, comma=self.comma_var.get())
+        except Exception as e:
+            self.win.configure(cursor=""); messagebox.showerror("Помилка експорту", str(e), parent=self.win); return
+        self.win.configure(cursor="")
+        self.status_var.set(f"Word збережено: {p}")
+        if messagebox.askyesno("", "Файл збережено. Відкрити?", parent=self.win): open_file_cross(p)
+
+    def _export_csv(self):
+        if not self._need(): return
+        p = filedialog.asksaveasfilename(parent=self.win, defaultextension=".csv", initialfile=self._default_name("csv"),
+                                         filetypes=[("CSV", "*.csv")])
+        if not p: return
+        comma = self.comma_var.get()
+        try:
+            X.export_csv_daily(p, self.series, comma=comma, sep=";" if comma else ",",
+                               base=self.rep["settings"]["gdd_base"])
+        except Exception as e:
+            messagebox.showerror("Помилка експорту", str(e), parent=self.win); return
+        self.status_var.set(f"CSV збережено: {p}")
+
+    def _export_set(self):
+        if not self._need(): return
+        if not self.rep["years"]:
+            messagebox.showwarning("", "Немає жодного року з повним покриттям вікна — набір порожній.\n"
+                                       "Змініть вікно ММ-ДД або запросіть ширший період.", parent=self.win); return
+        c = self.ctx
+        p = filedialog.asksaveasfilename(parent=self.win, defaultextension=".sadw", initialfile=self._default_name("sadw"),
+                                         filetypes=[("Погодний набір S.A.D.", "*.sadw"), ("JSON", "*.json")])
+        if not p: return
+        ws = W.weather_set(self.rep, c["place"], c["lat"], c["lon"], c["source"])
+        try:
+            with open(p, "w", encoding="utf-8") as fh: json.dump(ws, fh, ensure_ascii=False, indent=2)
+        except Exception as e:
+            messagebox.showerror("", str(e), parent=self.win); return
+        self.status_var.set(f"Погодний набір збережено ({len(ws['years'])} р.): {p}")
+
+    # ───────────────────────────────────────────────────────────
+    # Власні дані
+    # ───────────────────────────────────────────────────────────
+    def _open_file(self):
+        p = filedialog.askopenfilename(parent=self.win, title="Файл із добовими метеоданими",
+                                       filetypes=[("Таблиці", "*.csv *.txt *.tsv *.xlsx"), ("Усі файли", "*.*")])
+        if not p: return
+        try:
+            if p.lower().endswith(".xlsx"):
+                if not HAS_OPENPYXL: raise W.WeatherError("Потрібен openpyxl: pip install openpyxl")
+                wb = openpyxl.load_workbook(p, read_only=True, data_only=True); ws = wb.worksheets[0]
+                rows = []
+                for r in ws.iter_rows(values_only=True):
+                    if r is None or all(v is None for v in r): continue
+                    rows.append([(v.date().isoformat() if hasattr(v, "date") else ("" if v is None else str(v))) for v in r])
+                wb.close()
+                if len(rows) < 2: raise W.WeatherError("Аркуш порожній.")
+                headers, data = rows[0], rows[1:]
+            else:
+                with open(p, "rb") as fh: raw = fh.read()
+                text = None
+                for enc in ("utf-8-sig", "cp1251"):
+                    try: text = raw.decode(enc); break
+                    except UnicodeDecodeError: continue
+                headers, data = W.read_table_text(text)
+        except W.WeatherError as e:
+            messagebox.showerror("", str(e), parent=self.win); return
+        except Exception as e:
+            messagebox.showerror("Не вдалося прочитати файл", str(e), parent=self.win); return
+        self._ask_mapping(headers, data, os.path.basename(p))
+
+    def _paste_table(self):
+        try: text = self.win.clipboard_get()
+        except Exception:
+            messagebox.showwarning("", "Буфер порожній. Скопіюйте таблицю з Excel (разом із заголовками).", parent=self.win); return
+        try: headers, data = W.read_table_text(text)
+        except W.WeatherError as e:
+            messagebox.showwarning("", str(e), parent=self.win); return
+        self._ask_mapping(headers, data, "буфер обміну")
+
+    def _ask_mapping(self, headers, data, origin):
+        dlg = tk.Toplevel(self.win); dlg.title("Відповідність стовпців"); set_icon(dlg); dlg.grab_set()
+        f = tk.Frame(dlg, padx=14, pady=10); f.pack()
+        tk.Label(f, text=f"Джерело: {origin}, рядків: {len(data)}.\nОдиниці: °C, мм, %, м/с, МДж/м² (програма їх не перераховує).",
+                 font=("Times New Roman", 10), justify="left").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        guess = W.guess_columns(headers)
+        opts = ["— немає —"] + [str(h) for h in headers]
+        fields = [("date", "Дата *"), ("tmean", "Середня t, °C"), ("tmax", "Максимальна t, °C"),
+                  ("tmin", "Мінімальна t, °C"), ("prec", "Опади, мм"), ("rh", "Відносна вологість, %"),
+                  ("wind", "Вітер, м/с"), ("rad", "Радіація, МДж/м²")]
+        vars_ = {}
+        for r, (key, lbl) in enumerate(fields, start=1):
+            tk.Label(f, text=lbl, font=RF).grid(row=r, column=0, sticky="w", pady=1)
+            v = tk.StringVar(value=opts[guess[key] + 1] if key in guess else opts[0]); vars_[key] = v
+            ttk.Combobox(f, textvariable=v, values=opts, state="readonly", width=30).grid(row=r, column=1, padx=6, pady=1)
+
+        def ok():
+            mp = {k: opts.index(v.get()) - 1 for k, v in vars_.items() if v.get() != opts[0]}
+            if "date" not in mp:
+                messagebox.showwarning("", "Вкажіть стовпець із датою.", parent=dlg); return
+            if "tmean" not in mp and not ("tmax" in mp and "tmin" in mp):
+                messagebox.showwarning("", "Потрібна середня температура або пара tmax + tmin.", parent=dlg); return
+            try:
+                ser = W.series_from_table(headers, data, mp, {"retrieved_at": _dt.datetime.now().replace(microsecond=0).isoformat()})
+            except W.WeatherError as e:
+                messagebox.showwarning("", str(e), parent=dlg); return
+            dlg.destroy()
+            lat = lon = None
+            try: lat, lon = self._coords(False)
+            except ValueError: pass
+            self.ctx = {"place": self.place_var.get().strip(), "lat": lat, "lon": lon, "source": "file"}
+            self.d0_var.set(ser.dates[0].strftime("%d.%m.%Y")); self.d1_var.set(ser.dates[-1].strftime("%d.%m.%Y"))
+            msg = f"Прочитано {len(ser)} діб" + (f"; пропущено некоректних рядків: {ser.meta['bad_rows']}" if ser.meta.get("bad_rows") else "")
+            self.series = ser; self.norm = None; self.status_var.set(msg + ".")
+            self._recompute(select_summary=True)
+        tk.Button(f, text="Прочитати", font=RF, bg="#1a6b1a", fg="white", command=ok).grid(
+            row=len(fields) + 1, column=0, columnspan=2, pady=10)
+        center_win(dlg)
+
+    def _show_help(self):
+        win = tk.Toplevel(self.win); win.title("Довідка — Погода"); win.geometry("780x720"); set_icon(win)
+        frm = tk.Frame(win); frm.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
+        vsb = ttk.Scrollbar(frm, orient="vertical"); vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        txt = tk.Text(frm, wrap="word", font=("Times New Roman", 11), yscrollcommand=vsb.set, relief=tk.FLAT)
+        txt.pack(fill=tk.BOTH, expand=True); vsb.config(command=txt.yview)
+        txt.insert("1.0", self.HELP_TEXT); txt.configure(state="disabled")
