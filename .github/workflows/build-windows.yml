@@ -1,36 +1,101 @@
-name: Build Windows EXE (PyInstaller)
+name: Збірка Windows (.exe)
 
+# Запуск: вручну (Actions → «Збірка Windows (.exe)» → Run workflow) або створенням тегу, напр.  git tag v2.1.0 && git push --tags
 on:
   push:
-    branches: [ "main" ]
+    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      run_tests:
+        description: "Запустити тести перед збіркою (~5–8 хв)"
+        type: boolean
+        default: true
+
+# Токену потрібен запис, щоб крок «Реліз на GitHub» міг створити реліз (за замовчуванням у нових репозиторіях токен лише читає)
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: "1"            # кирилиця у виводі тестів і файлах на Windows
 
 jobs:
   build:
     runs-on: windows-latest
-
+    timeout-minutes: 60
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-build.txt
 
-      - name: Install dependencies
+      - name: Встановлення залежностей
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          pip install -r requirements-build.txt
 
-      - name: Build EXE
+      - name: Тести (без графічного інтерфейсу)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests }}
+        run: python run_tests.py
+
+      - name: Збірка PyInstaller
+        run: pyinstaller SAD.spec --noconfirm --clean
+
+      - name: Самоперевірка зібраної програми
+        shell: pwsh
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "SAD_Statystychnyj_Analiz_Danykh" --icon icon.ico main.py
+          $p = Start-Process -FilePath "dist\SAD\SAD.exe" -ArgumentList "--selftest","--selftest-out","selftest.log" -Wait -PassThru
+          if (Test-Path selftest.log) { Get-Content selftest.log -Encoding UTF8 } else { Write-Host "selftest.log не створено" }
+          if ($p.ExitCode -ne 0) { throw "Самоперевірка зібраної програми не пройдена (код $($p.ExitCode))" }
 
+      - name: Версія й архів
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") { $ver = "${{ github.ref_name }}" } else { $ver = "dev-" + $env:GITHUB_SHA.Substring(0,7) }
+          "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Compress-Archive -Path "dist\SAD" -DestinationPath "SAD-$ver-windows.zip"
+          Get-Item "SAD-$ver-windows.zip" | Select-Object Name, @{n="МБ";e={[math]::Round($_.Length/1MB,1)}}
 
-      - name: Upload artifact
+      - name: Журнал самоперевірки (артефакт)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-log
+          path: selftest.log
+          if-no-files-found: ignore
+
+      - name: Архів програми (артефакт)
         uses: actions/upload-artifact@v4
         with:
-          name: SAD_Statystychnyj_Analiz_Danykh-windows
-          path: dist/SAD_Statystychnyj_Analiz_Danykh.exe
+          name: SAD-windows-zip
+          path: SAD-*-windows.zip
+          if-no-files-found: error
+
+      # Інсталятор — необов'язковий крок: якщо він не зберається, основна збірка все одно вважається успішною
+      - name: Інсталятор (Inno Setup)
+        id: installer
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $v = $env:VERSION.TrimStart("v")
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$v" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC завершився з кодом $LASTEXITCODE" }
+
+      - name: Інсталятор (артефакт)
+        if: steps.installer.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SAD-windows-installer
+          path: installer_output/SAD-Setup-*.exe
+
+      - name: Реліз на GitHub (лише для тегів)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            SAD-*-windows.zip
+            installer_output/SAD-Setup-*.exe
+          fail_on_unmatched_files: false
