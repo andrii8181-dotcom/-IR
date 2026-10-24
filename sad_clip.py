@@ -9,17 +9,20 @@ import sys
 from html import escape
 
 
-def build_html_table(headers, rows, fills=None, font="Times New Roman", size_pt=11, header_fill="#D9E2F3"):
-    """HTML-таблиця з тонкою чорною сіткою. fills – список кольорів (або None) для кожного рядка."""
+def build_html_table(headers, rows, fills=None, font="Times New Roman", size_pt=11, header_fill="#D9E2F3", cell_fills=None):
+    """HTML-таблиця з тонкою чорною сіткою. fills – список кольорів (або None) для кожного рядка; cell_fills – список словників
+    {індекс_стовпця: колір} для окремих клітинок (має перевагу над кольором рядка)."""
     cell = f"border:1px solid #000000;padding:2px 6px;font-family:'{font}';font-size:{size_pt}pt;"
     out = [f'<table border="1" cellspacing="0" cellpadding="3" style="border-collapse:collapse;border:1px solid #000000;">']
     out.append("<tr>" + "".join(f'<th style="{cell}background:{header_fill};text-align:center;font-weight:bold;">{escape(str(h))}</th>' for h in headers) + "</tr>")
     for i, row in enumerate(rows):
         bg = (fills[i] if fills and i < len(fills) else None)
-        bgs = f"background:{bg};" if bg else ""
+        cf = cell_fills[i] if cell_fills and i < len(cell_fills) else {}
         tds = []
         for j, v in enumerate(row):
             al = "left" if j == 0 else "center"
+            c_bg = cf.get(j) or bg
+            bgs = f"background:{c_bg};" if c_bg else ""
             tds.append(f'<td style="{cell}{bgs}text-align:{al};">{escape("" if v is None else str(v))}</td>')
         out.append("<tr>" + "".join(tds) + "</tr>")
     out.append("</table>")
@@ -83,13 +86,13 @@ def _set_windows_clipboard(text, html_bytes):
         user32.CloseClipboard()
 
 
-def copy_table(widget, headers, rows, fills=None, tsv=None):
+def copy_table(widget, headers, rows, fills=None, tsv=None, cell_fills=None):
     """Копіює таблицю: у Windows – текст + HTML із сіткою; в інших системах – лише текст.
     Повертає 'html' (сітку збережено) або 'text'."""
     text = tsv if tsv is not None else "\n".join("\t".join("" if v is None else str(v) for v in r) for r in [list(headers)] + [list(r) for r in rows])
     if sys.platform == "win32":
         try:
-            _set_windows_clipboard(text, cf_html(build_html_table(headers, rows, fills)))
+            _set_windows_clipboard(text, cf_html(build_html_table(headers, rows, fills, cell_fills=cell_fills)))
             return "html"
         except Exception:
             pass

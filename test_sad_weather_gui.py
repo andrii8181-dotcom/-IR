@@ -17,6 +17,7 @@ def check(cond, msg):
 import main as m
 import sad_weather_core as W
 import sad_weather as SW
+import sad_weather_indices as W_ind
 
 # ───────────────────────────── імітація серверів ─────────────────────────────
 REQ = []
@@ -199,7 +200,7 @@ bad = []
 for kind, title in __import__("sad_weather_charts").CHARTS:
     win.chart_var.set(title); win._draw_chart(); root.update()
     if win._fig is None or not win._fig.axes: bad.append(title)
-check(not bad, f"всі 8 діаграм малюються у вікні ({'; '.join(bad)})")
+check(not bad, f"всі {len(__import__('sad_weather_charts').CHARTS)} діаграм малюються у вікні ({'; '.join(bad)})")
 win.chart_var.set("Діаграма Вальтера"); win._draw_chart()
 for ext in ("png", "svg", "pdf"):
     SAVE["path"] = os.path.join(TMP, f"chart.{ext}"); win._save_chart()
@@ -270,7 +271,7 @@ check(clip.startswith("Місяць\t") and clip.count("\n") == 36, "копію�
 check(sys.platform == "win32" or "як текст" in win.status_var.get(), "поза Windows користувача чесно попереджено, що в буфері текст (сітку дає Windows або кнопка «Word»)")
 import sad_clip as SCm
 captured = {}
-SCm.copy_table = lambda widget, headers, rows, fills=None, tsv=None: captured.update(h=headers, r=rows, f=fills, t=tsv) or "html"
+SCm.copy_table = lambda widget, headers, rows, fills=None, tsv=None, cell_fills=None: captured.update(h=headers, r=rows, f=fills, t=tsv, cf=cell_fills) or "html"
 win._copy_table("months")
 check(captured["h"][0] == "Місяць" and len(captured["r"]) == 36 and captured["t"].startswith("Місяць\t") and any(captured["f"]), "для копіювання з сіткою передаються заголовки, 36 рядків, кольори ГТК й текст TSV")
 check("із сіткою" in win.status_var.get() and "Word" in win.status_var.get(), "статус: «таблицю скопійовано разом із сіткою й кольорами»")
@@ -370,6 +371,100 @@ check(abs(float(win.lat_var.get()) - 48.75) < 1e-4 and abs(float(win.lon_var.get
 win._coords_dlg(); la_v, lo_v = win._coords_vars; la_v.set("95"); lo_v.set("10"); n = len(LOG["warn"]); old_lat = win.lat_var.get(); win._coords_ok()
 check(len(LOG["warn"]) == n + 1 and "широта" in LOG["warn"][-1][1] and win.lat_var.get() == old_lat, "широта 95° відхилена з поясненням, значення не змінено")
 win._coords_win.destroy(); win._set_point(48.7484, 30.2218, "")
+
+print("\n== 8в. Міжнародні індекси: ET₀, Вінклер, Югліна, індекс сухості")
+win._set_point(48.7484, 30.2218, ""); win._recompute(); root.update()
+iv = win.rep["intl"]
+check(iv["pet_method"] == "pm" and win.rep["series"].has("et0") and not win.series.has("et0"), "ET₀ розраховано (Пенман–Монтейт) для звіту й не записано у вихідний ряд користувача")
+tabs = [win.nb.tab(i, "text") for i in range(win.nb.index("end"))]
+check(tabs == ["Підсумок", "Добові дані", "Декади", "Місяці", "За роками", "Періоди", "Індекси", "SPI", "Графіки", "Для публікації"], f"вкладки: {tabs}")
+cols_m = tree_rows(win.holders["months"])["columns"]
+check("ET₀, мм" in cols_m and "P/ET₀" in cols_m, "у таблицях з'явилися колонки «ET₀, мм» і «P/ET₀»")
+check("Пенман" in win.idx_note.cget("text") and "GDD" in win.idx_note.cget("text") and "2 м" in win.idx_note.cget("text"), "на вкладці «Індекси» пояснено метод ET₀ і що СЕТ = GDD")
+tv_v = tree_rows(win.holders["vine"]); tv_a = tree_rows(win.holders["aridity"])
+check(len(tv_v.get_children()) == 4 and len(tv_a.get_children()) == 4, "таблиці Вінклера/Югліна й індексу сухості: по 4 сезони/роки (2021–2024)")
+vals = tv_v.item(tv_v.get_children()[0], "values"); check(vals[0] == "2021" and vals[2].split(" ")[0] in ("I", "II", "III", "IV", "V") and vals[4].startswith("HI"), f"рядок вінограрських індексів: {vals[:5]}")
+va = tv_a.item(tv_a.get_children()[0], "values"); check(va[0] == "2021" and float(va[3].replace(",", ".")) > 0 and va[4] in ("гіперарідний", "арідний", "напівзасушливий", "сухий субвологий", "вологий"), f"рядок індексу сухості: {va}")
+txt = win.txt_sum.get("1.0", "end"); check("Індекс сухості P/ET₀ за період" in txt and "Еталонне випаровування ET₀" in txt and "Пенман" in txt, "підсумок містить ET₀, водний баланс, індекс сухості й примітку про метод")
+cap2 = {}
+import sad_clip as SCm2
+SCm2.copy_table = lambda widget, headers, rows, fills=None, tsv=None, cell_fills=None: cap2.update(h=headers, r=rows, cf=cell_fills) or "html"
+win._copy_table("vine"); check(cap2["h"][0] == "Сезон" and len(cap2["r"]) == 4 and any(cap2["cf"]), "копіювання таблиці Вінклера/Югліна передає кольори клітинок (клас)")
+win._copy_table("aridity"); check(cap2["h"][3] == "Індекс сухості P/ET₀" and any(cap2["cf"]), "копіювання індексу сухості з кольорами класів")
+win.chart_var.set("Вінклер і Югліна за сезонами"); win._draw_chart(); root.update()
+check(len(win._fig.axes) == 2 and "Вінклер" in " ".join(t.get_text() for a in win._fig.axes if a.get_legend() for t in a.get_legend().get_texts()), "діаграма Вінклера й Югліна: 2 панелі з легендою")
+win.chart_var.set("SPI за місяцями"); win._draw_chart(); root.update()
+check(any("SPI ще не розраховано" in t.get_text() for t in win._fig.texts + [x for a in win._fig.axes for x in a.texts]), "до розрахунку SPI діаграма пояснює, що робити")
+SAVE["path"] = os.path.join(TMP, "i.xlsx"); ASK["ans"] = False; win._export_xlsx()
+import openpyxl as _ox; wb2 = _ox.load_workbook(SAVE["path"]); check("Вінклер і Югліна" in wb2.sheetnames and "Індекс сухості" in wb2.sheetnames and "SPI" not in wb2.sheetnames, f"Excel: аркуші індексів є, SPI ще немає ({wb2.sheetnames[-3:]})")
+wsv = wb2["Вінклер і Югліна"]; check(wsv.cell(2, 1).value == "2021" and isinstance(wsv.cell(2, 2).value, float) and isinstance(wsv.cell(2, 3).value, str) and wsv.cell(2, 3).fill.fgColor.rgb not in (None, "00000000"), "Excel: Вінклер числом, регіон текстом із заливкою класу")
+SAVE["path"] = os.path.join(TMP, "i.docx"); win._export_docx(); import docx as _dx; d2 = _dx.Document(SAVE["path"])
+htxt = [c.text for tb in d2.tables for c in tb.rows[0].cells]; ptxt = " ".join(p.text for p in d2.paragraphs)
+check(any("Вінклер" in h for h in htxt) and any("P/ET₀" in h for h in htxt) and "Міжнародні агрокліматичні показники" in ptxt and "[1]" in ptxt and "Allen R.G." in ptxt, "Word: таблиці індексів, розділ про методи, нумерована література")
+ASK["ans"] = True
+pub = win.txt_pub.get("1.0", "end"); check("МІЖНАРОДНІ АГРОКЛІМАТИЧНІ ПОКАЗНИКИ" in pub and "ЛІТЕРАТУРА ДО МІЖНАРОДНИХ ПОКАЗНИКІВ" in pub and pub.index("[1]") < pub.index("[2]") < pub.index("[3]"), "текст для публікації: методи індексів і література за порядком появи")
+
+print("\n== 8г. SPI: довгий ряд, діаграма, експорт, помилки")
+# нижня смуга прокрутки таблиць має бути ВИДИМОЮ навіть для довгих таблиць (декади – 108 рядків)
+def hsb_visible(tab, holder):
+    hs = [x for x in all_widgets(holder) if x.winfo_class() == "TScrollbar" and str(x.cget("orient")) == "horizontal"]
+    if not hs: return False
+    h_ = hs[0]; root.update()
+    return h_.winfo_ismapped() and h_.winfo_rooty() + h_.winfo_height() <= win.win.winfo_rooty() + win.win.winfo_height() - 20 and h_.winfo_height() > 5
+win.win.geometry("1360x640"); root.update()                 # низький екран (ноутбук 768 px): саме тут нижню смугу раніше виштовхувало за межі вкладки
+for key, tab in (("decades", None), ("months", None), ("years", win.tab_years), ("vine", win.tab_idx), ("aridity", win.tab_idx)):
+    sel_tab = win.holders[key].master; win.nb.select(sel_tab); root.update()
+    check(hsb_visible(sel_tab, win.holders[key]), f"таблиця «{key}»: нижня смуга прокрутки видима у вікні")
+win.nb.select(win.tab_day); root.update(); check(hsb_visible(win.tab_day, win.day_holder), "«Добові дані» (понад тисячу рядків): нижня смуга прокрутки видима")
+win.win.geometry("1340x840"); root.update()
+win2 = m.WeatherWindow(root); root.update(); n = len(LOG["info"]); win2._load_spi()
+check(len(LOG["info"]) == n + 1 and "Спершу отримайте дані" in LOG["info"][-1][1], "SPI без завантажених даних → підказка")
+win2._close()
+win.sr0.set("1991"); win.sr1.set("2020")
+for k, v in win.spi_vars.items(): v.set(False)
+n = len(LOG["warn"]); win._load_spi(); check(len(LOG["warn"]) == n + 1 and "масштаб" in LOG["warn"][-1][1], "жодного масштабу не обрано → попередження")
+for k, v in win.spi_vars.items(): v.set(True)
+win.sr0.set("abc"); n = len(LOG["warn"]); win._load_spi(); check(len(LOG["warn"]) == n + 1 and "цілими числами" in LOG["warn"][-1][1], "нечислові роки → попередження")
+win.sr0.set("2020"); win.sr1.set("1991"); n = len(LOG["warn"]); win._load_spi(); check(len(LOG["warn"]) == n + 1 and "«від» ≤ «до»" in LOG["warn"][-1][1], "рік «від» > «до» → попередження")
+win.sr0.set("2005"); win.sr1.set("2020"); n = len(LOG["warn"]); REQ.clear(); win._load_spi()
+check(len(LOG["warn"]) == n + 1 and "замалий" in LOG["warn"][-1][1] and len(REQ) == 0, "еталон 16 років → відмова з поясненням, жодного запиту до мережі")
+win.sr0.set("1991"); win.sr1.set(str(dt.date.today().year)); n = len(LOG["warn"]); win._load_spi(); check(len(LOG["warn"]) == n + 1 and "завершений рік" in LOG["warn"][-1][1], "незавершений рік серед еталонних → відмова")
+win.sr1.set("2020"); REQ.clear(); ASK["ans"] = False; n = len(LOG["ask"]); win._load_spi()
+check(len(LOG["ask"]) == n + 1 and "35 запитів" in LOG["ask"][-1][1] and "1990–2024" in LOG["ask"][-1][1] and len(REQ) == 0 and win.spi is None, "перед довгим завантаженням (1990–2024, 35 запитів) програма питає; за відмови запитів немає")
+ASK["ans"] = True; REQ.clear(); win._load_spi(); ok = pump(lambda: win.spi is not None, 120); root.update()
+check(ok and len(REQ) == 35 and all("community=AG" in u for u in REQ) and "start=19900101" in REQ[0], f"завантажено 35 років (з 1990 – року перед еталонним, 1991–2020) окремими запитами: {len(REQ)}")
+sp = win.spi; check(sp["ref"] == (1991, 2020) and sp["scales"] == [1, 3, 6, 12] and len(sp["rows"]) == 48 and sp["rows"][0]["label"] == "01.2021" and sp["rows"][-1]["label"] == "12.2024", "SPI: еталон 1991–2020, масштаби 1/3/6/12, 48 місяців періоду дослідження")
+check(all(not math.isnan(r["spi"][12]) for r in sp["rows"]) and all(not math.isnan(r["spi"][1]) for r in sp["rows"]), "для всіх місяців 2021–2024 SPI розраховано (їм передує довгий ряд)")
+check(sp["n_ref"] == {1: 30, 3: 30, 6: 30, 12: 30} and sp["warnings"] == [], f"в еталонному періоді для кожного календарного місяця й масштабу рівно 30 років, попереджень немає: {sp['n_ref']}")
+check(win.rep["spi"] is sp and win.nb.tab(win.nb.select(), "text") == "SPI", "звіт отримав SPI, відкрилась вкладка «SPI»")
+win.win.geometry("1360x640"); win.nb.select(win.tab_spi); root.update()
+check(hsb_visible(win.tab_spi, win.holders["spi"]), "таблиця SPI (48 рядків, 8 колонок) у низькому вікні: нижня смуга прокрутки видима")
+win.win.geometry("1340x840"); root.update()
+tv_s = tree_rows(win.holders["spi"]); check(len(tv_s.get_children()) == 48 and "SPI-12" in tv_s["columns"] and "Оцінка SPI-12" in tv_s["columns"], "таблиця SPI: 48 рядків, колонки SPI-k й оцінка")
+check("Еталонний період 1991–2020" in win.spi_note.cget("text") and "екстремально сухо" in win.spi_note.cget("text"), "підпис пояснює еталонний період і класи")
+win.chart_var.set("SPI за місяцями"); win._draw_chart(); root.update()
+check(len(win._fig.axes) == 4 and any("Вологі" in t.get_text() for a in win._fig.axes if a.get_legend() for t in a.get_legend().get_texts()), "діаграма SPI: 4 панелі (за кількістю масштабів), легенда")
+SAVE["path"] = os.path.join(TMP, "s.xlsx"); ASK["ans"] = False; win._export_xlsx(); wb3 = _ox.load_workbook(SAVE["path"])
+check("SPI" in wb3.sheetnames and wb3["SPI"].max_row == 49 and wb3["SPI"].cell(1, 3).value == "SPI-1", "Excel: аркуш SPI (48 місяців, колонки SPI-k)")
+zs = [wb3["SPI"].cell(r, 3).value for r in range(2, 50)]; cls_ = [wb3["SPI"].cell(r, 4).value for r in range(2, 50)]
+check(all(isinstance(z, float) for z in zs) and all(c == W_ind.spi_class(z) for c, z in zip(cls_, zs)), "Excel: SPI числами, оцінки збігаються з класифікацією McKee")
+SAVE["path"] = os.path.join(TMP, "s.docx"); win._export_docx(); d3 = _dx.Document(SAVE["path"])
+check(not any("SPI" in tb.rows[0].cells[0].text or "SPI" in " ".join(c.text for c in tb.rows[0].cells) for tb in d3.tables), "SPI-таблиця на 48 місяців у Word не вставляється (надто довга) – вона є в Excel")
+check(len(d3.inline_shapes) >= 5, f"у Word додано діаграми Вінклера/Югліна й SPI (рисунків {len(d3.inline_shapes)})")
+pub = win.txt_pub.get("1.0", "end"); check("Стандартизований індекс опадів (SPI)" in pub and "McKee" in pub and "WMO-No. 1090" in pub and "1991–2020" in pub, "текст для публікації: опис SPI та література (McKee, WMO)")
+import re as _re
+seq = [int(x) for grp in _re.findall(r"\[(\d+(?:, \d+)*)\]", pub) for x in grp.split(", ")]; first = []
+for x in seq:
+    if x not in first: first.append(x)
+check(first == list(range(1, 8)) and len(_re.findall(r"^\d+\. ", pub, _re.M)) >= 7, f"посилання в тексті нумеруються за порядком першої появи: {first}; у списку літератури 7 джерел")
+ASK["ans"] = True
+win.sr0.set("1991"); win.sr1.set("2020"); MODE["offline"] = True; had = win.spi; n = len(LOG["error"]); win._load_spi(); pump(lambda: len(LOG["error"]) > n, 15)
+check(len(LOG["error"]) == n + 1 and "з'єднання" in LOG["error"][-1][1] and not win._busy and win.spi is had, "немає інтернету під час SPI → повідомлення, попередній SPI збережено")
+MODE["offline"] = False
+win._clear_spi(); root.update(); check(win.spi is None and win.rep["spi"] is None and len(tree_rows(win.holders["spi"]).get_children()) == 0 if tree_rows(win.holders["spi"]) else win.spi is None, "«Прибрати» очищає SPI й таблицю")
+win.spi = sp; win._on_fetched(win.series, win.series.dates[0], win.series.dates[-1]); check(win.spi is None, "нове завантаження даних скидає SPI (інший період чи місце)")
+nsp = {"rows": [{"year": 2021, "month": 1, "label": "01.2021", "prec": float("nan"), "spi": {1: float("nan")}, "class": {1: ""}}], "scales": [1], "ref": (1991, 2020), "n_ref": {1: 0}, "warnings": ["тест"], "params": {}}
+n = len(LOG["warn"]); win._on_spi(nsp); check(len(LOG["warn"]) == n + 1 and "SPI не розраховано" in LOG["warn"][-1][0] and win.spi is None, "SPI без жодного значення → попередження, а не порожній результат")
 
 print("\n== 9. Аварійні сценарії")
 win.src_var.set(W.SOURCE_TITLES["nasa"]); win._on_source(); win.d0_var.set("01.01.2019"); win.d1_var.set("30.06.2019")

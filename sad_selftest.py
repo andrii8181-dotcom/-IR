@@ -12,7 +12,7 @@ MODULES = ['sad_app', 'sad_assoc_core', 'sad_assoc_sections', 'sad_breeding', 's
            'sad_design_sections', 'sad_gencorr_core', 'sad_gencorr_sections', 'sad_gxe_core', 'sad_het_ord_sections',
            'sad_heterosis_core', 'sad_homogeneous', 'sad_journal_trial', 'sad_manova', 'sad_mixed_core', 'sad_mixed_sections',
            'sad_ordinal_core', 'sad_regression', 'sad_repeated', 'sad_scheme_constructor', 'sad_selection_core',
-           'sad_selection_sections', 'sad_stability_ancova', 'sad_weather', 'sad_weather_charts', 'sad_weather_core', 'sad_weather_export', 'sad_worldmap']
+           'sad_selection_sections', 'sad_stability_ancova', 'sad_weather', 'sad_weather_charts', 'sad_weather_core', 'sad_weather_export', 'sad_weather_indices', 'sad_worldmap']
 WINDOWS = ["CorrelationWindow", "DescriptiveWindow", "TTestWindow", "RegressionWindow", "ClusterWindow", "PCAWindow",
            "RepeatedMeasuresWindow", "MixedRepeatedWindow", "StabilityWindow", "AncovaWindow", "ManovaWindow", "FieldJournalWindow",
            "SchemeConstructorWindow", "WeatherWindow", "BreedingStabilityWindow", "GenParWindow", "CombAbilityWindow", "StressWindow",
@@ -87,6 +87,18 @@ def run(main_module, out_path=None):
         rg = np.random.default_rng(9)
         AC.eta_squared([rg.normal(m, 1, 8) for m in (0, 1, 2)]); AC.two_group_effects(rg.normal(0, 1, 12), rg.normal(.5, 1, 12), n_boot=50)
         AC.contingency_analysis([[12, 5, 3], [4, 9, 8]], n_boot=50, n_mc=500)
+    def t_indices():
+        import calendar as _cal
+        import sad_weather_core as W, sad_weather_indices as WI
+        s0 = dt.date(1988, 1, 1); n = 365 * 36 + 9; rg = np.random.default_rng(12); dts = [s0 + dt.timedelta(days=i) for i in range(n)]
+        doy = np.array([d.timetuple().tm_yday for d in dts], float); t = 10 + 11 * np.sin(2 * np.pi * (doy - 110) / 365) + rg.normal(0, 2, n)
+        ser = W.DailySeries(dts, {"tmean": t, "tmax": t + 5, "tmin": t - 5, "prec": np.where(rg.random(n) < .3, rg.gamma(1.4, 5.0, n), 0.),
+                                  "rad": np.full(n, 15.0), "wind": np.full(n, 2.5), "rh": np.full(n, 70.0)}, {"grid_elevation_m": 200.0})
+        et = float(WI.et0_pm(21.5, 12.3, 22.07, 2.078, 187, 50 + 48 / 60.0, 100.0, ea=1.409)); assert abs(et - 3.88) < 0.01, et         # FAO-56, приклад 18
+        sp = WI.spi_table(ser, ref=(1991, 2020), scales=(1, 3), study=(dt.date(2022, 1, 1), dt.date(2022, 12, 31)))
+        assert len(sp["rows"]) == 12 and all(r["spi"][3] == r["spi"][3] for r in sp["rows"])
+        st_ = W.default_settings(); st_["lat"] = 48.75; rep = W.build_report(ser.slice(dt.date(2020, 1, 1), dt.date(2023, 12, 31)), st_, spi=sp)
+        assert rep["intl"]["pet_method"] == "pm" and rep["intl"]["vine"] and rep["intl"]["aridity"]
     def t_worldmap():
         import sad_worldmap as WM
         D = WM.MapData.get()
@@ -102,9 +114,12 @@ def run(main_module, out_path=None):
         import sad_weather_core as W, sad_weather_charts as CH
         s0 = dt.date(2022, 1, 1); n = 730; rg = np.random.default_rng(10); dts = [s0 + dt.timedelta(days=i) for i in range(n)]
         t = 9 + 11 * np.sin(2 * np.pi * np.array([d.timetuple().tm_yday for d in dts]) / 365)
-        rep = W.build_report(W.DailySeries(dts, {"tmean": t, "tmax": t + 4, "tmin": t - 4, "prec": rg.random(n) * 5}), W.default_settings())
+        stt = W.default_settings(); stt["lat"] = 48.75                      # широта потрібна для вінограрських індексів
+        rep = W.build_report(W.DailySeries(dts, {"tmean": t, "tmax": t + 4, "tmin": t - 4, "prec": rg.random(n) * 5}), stt)
         for kind, _ in CH.CHARTS:
-            f = Figure(); assert CH.build_chart(f, kind, rep, "Тест", {"general": {"width_cm": 18, "font_family": "DejaVu Sans"}, "colors": {kind: {}}}) is None, kind
+            f = Figure(); res = CH.build_chart(f, kind, rep, "Тест", {"general": {"width_cm": 18, "font_family": "DejaVu Sans"}, "colors": {kind: {}}})
+            if kind == "spi": assert isinstance(res, str) and "SPI" in res, res          # SPI потребує довгого ряду: діаграма пояснює, що робити
+            else: assert res is None, (kind, res)
     def t_scipy_misc():
         from scipy import stats, optimize, sparse, special, spatial
         from scipy.sparse.linalg import splu
@@ -113,6 +128,7 @@ def run(main_module, out_path=None):
     for n, f in (("розрахунок: тест Дуннетта", t_control), ("розрахунок: змішана модель REML", t_mixed), ("розрахунок: AMMI/GGE/стабільність", t_gxe),
                  ("розрахунок: генетичні параметри", t_breeding), ("розрахунок: кореляції (Кендалл, частинна)", t_corr),
                  ("розрахунок: генотипні кореляції", t_gencorr), ("розрахунок: η, бісеріальні, спряженість", t_assoc), ("scipy: stats/special/sparse/spatial/optimize", t_scipy_misc),
+                 ("міжнародні показники: ET₀ FAO-56, SPI (scipy gamma.fit), Вінклер, Югліна, індекс сухості", t_indices),
                  ("карта світу: дані, країна, найближче місто, пошук, відсікання", t_worldmap), ("копіювання таблиці: HTML-формат буфера", t_clip),
                  ("діаграми: усі 8 зі стилем користувача", t_chart_style)):
         _check(log, n, f)

@@ -11,6 +11,7 @@ import datetime as _dt
 from decimal import Decimal, ROUND_HALF_UP
 import urllib.request, urllib.parse, urllib.error
 import numpy as np
+import sad_weather_indices as WI
 
 NAN = float("nan")
 
@@ -637,6 +638,8 @@ def quality_notes(series, source, d0, d1, today=None):
                      "дисертації бажано порівняти з найближчою станцією, якщо вона є.")
     if series.meta.get("tmean_derived"):
         notes.append("Середню добову температуру обчислено як (tmax + tmin)/2.")
+    if series.meta.get("et0_note"):
+        notes.append(series.meta["et0_note"])
     return notes
 
 # ═══════════════════════════════════════════════════════════════
@@ -671,7 +674,7 @@ def methods_paragraph(series, d0, d1, lat, lon, source, gdd_base, htc_method, ex
                         "місяці із середньою температурою вище 10 °C, опади враховували за весь період; "
                         "для місяців без активних температур показник не визначали"}.get(htc_method, "")
     calc = (f"Суму активних температур (САТ) обчислювали як суму середньодобових температур за доби з "
-            f"tсер > 5, 10 та 15 °C; суму ефективних температур (СЕТ) – як суму перевищень "
+            f"tсер > 5, 10 та 15 °C; суму ефективних температур (СЕТ; у зарубіжній літературі – growing degree days, GDD) – як суму перевищень "
             f"середньодобової температури над біологічним мінімумом {gdd_base:g} °C. "
             f"Гідротермічний коефіцієнт Селянінова (ГТК) визначали за формулою ГТК = ΣR / (0,1·Σt), де "
             f"ΣR – сума опадів, мм, Σt – сума активних температур вище 10 °C за той самий період; {htc_txt}. "
@@ -724,7 +727,8 @@ INDICATOR_DEFS = [
     ("dry_spell_max", "Найдовший період без опадів (<1 мм)", "діб"),
     ("rad_sum", "Сумарна сонячна радіація", "МДж/м²"),
     ("et0_sum", "Еталонне випаровування ET₀", "мм"),
-    ("water_balance", "Водний баланс (опади − ET₀)", "мм"),
+    ("water_balance", "Водний баланс (опади – ET₀)", "мм"),
+    ("ai", "Індекс сухості P/ET₀ у вікні", ""),
 ]
 
 def year_windows(series, window, years=None):
@@ -781,30 +785,54 @@ def intervals_from_dates(dates, season_start=None, mode="between"):
 
 def default_settings():
     return {"gdd_base": 10.0, "gdd_upper": None, "htc_method": "decade", "frost_thr": 0.0,
-            "window": (4, 1, 10, 31), "years": None, "base_temps": (5.0, 10.0, 15.0)}
+            "window": (4, 1, 10, 31), "years": None, "base_temps": (5.0, 10.0, 15.0),
+            "lat": None, "lon": None, "elev": None}
 
 def stat_kwargs(settings):
     return {"base_temps": tuple(settings.get("base_temps", (5.0, 10.0, 15.0))),
             "gdd_base": settings.get("gdd_base", 10.0), "gdd_upper": settings.get("gdd_upper"),
             "htc_method": settings.get("htc_method", "decade")}
 
-def build_report(series, settings, norm=None, periods=None):
-    """Єдиний розрахунковий звіт – вхід для вікна, графіків і експорту."""
+def _range_sum(series, arr, a, b, min_share=0.95):
+    """Сума масиву arr (вирівняного з series.dates) за [a, b] із пропорційною компенсацією пропусків; NaN, якщо покриття < min_share."""
+    ix = [i for i, d in enumerate(series.dates) if a <= d <= b]
+    if not ix: return NAN
+    v = arr[ix]; ok = ~np.isnan(v)
+    if ok.mean() < min_share: return NAN
+    return float(np.sum(v[ok]) * len(ix) / ok.sum())
+
+
+def build_report(series, settings, norm=None, periods=None, spi=None):
+    """Єдиний розрахунковий звіт – вхід для вікна, графіків і експорту.
+    Якщо в ряді немає ET₀, але є координати й tmax/tmin, ET₀ розраховується (Пенман–Монтейт або Харгрівз–Самані) і підставляється
+    у робочу копію ряду як «et0»: тоді ET₀, водний баланс і P/ET₀ з'являються в усіх таблицях. Вихідний ряд користувача не змінюється."""
+    lat = settings.get("lat")
+    pet, pmeth, pnote = WI.pet_series(series, lat, settings.get("elev"))
+    if pmeth in ("pm", "hs"):
+        data = dict(series.data); data["et0"] = pet
+        series = DailySeries(series.dates, data, {**series.meta, "et0_method": pmeth, "et0_note": pnote})
     kw = stat_kwargs(settings)
     d0, d1 = series.dates[0], series.dates[-1]
     rep = {"settings": dict(settings), "series": series, "d0": d0, "d1": d1}
     rep["total"] = period_stats(series, **kw)
     rep["total"]["water_balance"] = balance_water(series)
+    rep["total"]["ai"] = WI.window_ai(rep["total"]["prec_sum"], rep["total"]["et0_sum"])
     rep["decades"] = table_by_groups(series, decade_key, decade_label, **kw)
     rep["months"] = table_by_groups(series, month_key, month_label, **kw)
     rep["years"], rep["years_skipped"] = by_year_table(series, settings["window"], settings.get("years"), **kw)
+    for r in rep["years"]: r["ai"] = WI.window_ai(r["prec_sum"], r["et0_sum"])
     rep["norm"] = norm            # (norm_dict, years_list, label) або None
     if norm:
         nd = norm[0]
         for r in rep["years"]:
             r["anom"] = anomaly_row(r, nd)
     rep["periods"] = periods_table(series, periods, **kw) if periods else []
+    for r in rep["periods"]:
+        if not r.get("empty"): r["ai"] = WI.window_ai(r["prec_sum"], r["et0_sum"])
     rep["frost"] = frost_events(series, settings.get("frost_thr", 0.0))
+    rep["intl"] = {"lat": lat, "pet_method": pmeth, "pet_note": pnote, "vine": WI.vine_rows(series, lat),
+                   "aridity": WI.aridity_rows(series, series.get("et0") if series.has("et0") else np.full(len(series), NAN))}
+    rep["spi"] = spi
     return rep
 
 def weather_set(rep, place="", lat=None, lon=None, source=""):

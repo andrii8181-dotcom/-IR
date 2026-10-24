@@ -30,7 +30,10 @@ hidden = mods + [
 
 # Те, чого програма не використовує (зменшує розмір пакета)
 excludes = ["pandas", "pytest", "IPython", "jupyter", "notebook", "PyQt5", "PyQt6", "PySide2", "PySide6", "sphinx",
-            "numba", "tensorflow", "torch", "sklearn", "statsmodels", "matplotlib.tests", "scipy.tests", "numpy.tests"]
+            "numba", "llvmlite", "tensorflow", "torch", "sklearn", "statsmodels", "matplotlib.tests", "scipy.tests", "numpy.tests",
+            # пакети лише для перевірки (еталонні реалізації в тестах) і важкі залежності, яких програма не використовує
+            "xarray", "dask", "distributed", "partd", "flox", "cftime", "pyarrow", "seaborn", "xclim", "pint", "shapely", "pyet",
+            "standard_precip", "cartopy", "geopandas"]
 
 a = Analysis(["main.py"], pathex=[here], binaries=[], datas=datas, hiddenimports=hidden, hookspath=[], runtime_hooks=[],
              excludes=excludes, noarchive=False)

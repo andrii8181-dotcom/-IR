@@ -8,6 +8,7 @@ import sad_weather_charts as CH
 import sad_weather_export as X
 import sad_worldmap as WM
 import sad_clip as SC
+import sad_weather_indices as W_indices
 
 HTC_BG = {"d4": "#f4b6b6", "d3": "#f8cbad", "d2": "#fce4d6", "d1": "#fff2cc",
           "ok": "#e2efda", "wet": "#ddebf7"}
@@ -74,9 +75,26 @@ class WeatherWindow:
     Шкала: < 0,4 дуже сильна посуха; 0,4–0,5 сильна; 0,6–0,7 середня; 0,8–0,9 слабка;
     1,0–1,5 достатньо волого; > 1,5 надмірно волого (за значенням, округленим до 0,1).
 
+МІЖНАРОДНІ ПОКАЗНИКИ (вкладки «Індекси» й «SPI»)
+  Назви: СЕТ у програмі = GDD (growing degree days) з порогом 10 °C; САТ – сума активних температур.
+  ET₀ (еталонне випаровування) програма розраховує сама, якщо вказано місце й є добові tmax і tmin: за FAO-56 Пенман–Монтейт
+  (потрібні також радіація, вітер на висоті 2 м і вологість – у NASA POWER вони є), інакше за Харгрівзом–Самані (менш точно).
+  Якщо ET₀ є у ваших даних, використовується вона. ET₀ та водний баланс (опади – ET₀) з'являються в таблицях.
+  Індекс сухості ЮНЕП = P/ET₀ за календарний рік: < 0,05 гіперарідний; 0,05–0,20 арідний; 0,20–0,50 напівзасушливий;
+  0,50–0,65 сухий субвологий; ≥ 0,65 вологий. У таблиці «За роками» P/ET₀ наведено й для вашого вікна (це не стандартний річний показник).
+  Вінклер – сума (tсер – 10 °C) за 1 квітня – 31 жовтня (на півдні 1 жовтня – 30 квітня): регіони I–V (1389, 1667, 1944, 2222 °C·діб).
+  Югліна (HI) – k·Σ((tсер – 10) + (tmax – 10))/2 за 1 квітня – 30 вересня; k – за широтою (1,00 до 40°; 1,02…1,06 для 40–50°;
+  понад 50° – 1,06). Класи: HI–3 (до 1500) … HI+3 (понад 3000). Індекси рахуються лише за сезони з повним покриттям даними.
+  SPI – стандартизований індекс опадів для масштабів 1, 3, 6, 12 місяців: гамма-розподіл за методом максимальної правдоподібності
+  окремо для кожного календарного місяця за еталонні роки (за замовчуванням 1991–2020; WMO: не менше 30 років, програма вимагає ≥ 20).
+  Кнопка «Завантажити дані й обчислити SPI» бере добові опади NASA POWER за еталонні роки й ваш період (≈ 2–4 с на рік).
+  Класи: ≥ 2 екстремально волого … ≤ –2 екстремально сухо. Для власних даних SPI рахується з наявного ряду (потрібні довгі спостереження).
+  У Word і Excel індекси додаються таблицями з кольоровими класами; у тексті для публікації з'являється опис методів і нумерована
+  література (за порядком першої появи).
+
 ВКЛАДКИ
   Підсумок · Добові дані · Декади · Місяці · За роками (+ норма й відхилення) · Періоди
-  (довільні, напр. між замірами журналу) · Графіки · Для публікації (методика, подяка, примітки).
+  (довільні, напр. між замірами журналу) · Індекси · SPI · Графіки · Для публікації (методика, подяка, примітки).
 
 ТАБЛИЦІ Й КОПІЮВАННЯ
   Кнопка «Копіювати таблицю» кладе в буфер таблицю разом із сіткою: у Word і Excel (Windows)
@@ -119,7 +137,7 @@ class WeatherWindow:
         self.ctx = {"place": "", "lat": None, "lon": None, "source": "nasa"}
         self._q = queue.Queue(); self._busy = False; self._alive = True
         self._fig = None; self._canvas = None
-        self.chart_style = CH.load_style(); self._years_touched = False; self._auto_place = ""
+        self.chart_style = CH.load_style(); self._years_touched = False; self._auto_place = ""; self.spi = None
         self._build()
         self.win.protocol("WM_DELETE_WINDOW", self._close)
         self.win.after(150, self._poll)
@@ -472,6 +490,35 @@ class WeatherWindow:
         self.per_list.pack(fill=tk.X); phsb.pack(fill=tk.X)
         self.holders["periods"] = tk.Frame(self.tab_per)
         self.holders["periods"].pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        # Індекси: вінограрські та сухості
+        self.tab_idx = tk.Frame(self.nb); self.nb.add(self.tab_idx, text="Індекси")
+        bar = tk.Frame(self.tab_idx, pady=4); bar.pack(fill=tk.X)
+        tk.Button(bar, text="📋 Копіювати Вінклер/Югліна", font=RF, command=lambda: self._copy_table("vine")).pack(side=tk.LEFT, padx=6)
+        tk.Button(bar, text="📋 Копіювати індекс сухості", font=RF, command=lambda: self._copy_table("aridity")).pack(side=tk.LEFT)
+        self.idx_note = tk.Label(self.tab_idx, text="", font=("Times New Roman", 10), fg="#8c5a1a", justify="left", wraplength=900, anchor="w")
+        self.idx_note.pack(fill=tk.X, padx=8)
+        tk.Label(self.tab_idx, text="Вінклер і Югліна – вінограрські індекси за сезонами", font=RB, anchor="w").pack(fill=tk.X, padx=8, pady=(4, 0))
+        self.holders["vine"] = tk.Frame(self.tab_idx); self.holders["vine"].pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 4))
+        tk.Label(self.tab_idx, text="Індекс сухості ЮНЕП (P/ET₀) за календарними роками", font=RB, anchor="w").pack(fill=tk.X, padx=8)
+        self.holders["aridity"] = tk.Frame(self.tab_idx); self.holders["aridity"].pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+        # SPI
+        self.tab_spi = tk.Frame(self.nb); self.nb.add(self.tab_spi, text="SPI")
+        bar = tk.Frame(self.tab_spi, pady=4); bar.pack(fill=tk.X)
+        tk.Label(bar, text="Еталонні роки:", font=RF).pack(side=tk.LEFT, padx=(6, 2))
+        self.sr0 = tk.StringVar(value="1991"); self.sr1 = tk.StringVar(value="2020")
+        tk.Entry(bar, textvariable=self.sr0, font=RF, width=6).pack(side=tk.LEFT); tk.Label(bar, text="–", font=RF).pack(side=tk.LEFT)
+        tk.Entry(bar, textvariable=self.sr1, font=RF, width=6).pack(side=tk.LEFT)
+        tk.Label(bar, text="Масштаби, міс.:", font=RF).pack(side=tk.LEFT, padx=(12, 2))
+        self.spi_vars = {k: tk.BooleanVar(value=True) for k in (1, 3, 6, 12)}
+        for k, v in self.spi_vars.items(): tk.Checkbutton(bar, text=str(k), variable=v, font=RF).pack(side=tk.LEFT)
+        tk.Button(bar, text="⬇ Завантажити дані й обчислити SPI", font=RF, command=self._load_spi).pack(side=tk.LEFT, padx=8)
+        tk.Button(bar, text="✖ Прибрати", font=("Times New Roman", 10), command=self._clear_spi).pack(side=tk.LEFT)
+        tk.Button(bar, text="📋 Копіювати", font=RF, command=lambda: self._copy_table("spi")).pack(side=tk.LEFT, padx=6)
+        self.spi_note = tk.Label(self.tab_spi, text="SPI – стандартизований індекс опадів (McKee та ін., 1993; WMO, 2012). Потрібен довгий ряд опадів (WMO: ≥ 30 років). Програма завантажує "
+                                 "добові дані NASA POWER за еталонні роки та період дослідження (≈ 2–4 с на рік, щоразу заново) і обчислює SPI окремо для кожного календарного місяця.",
+                                 font=("Times New Roman", 10), fg="#666", justify="left", wraplength=900, anchor="w")
+        self.spi_note.pack(fill=tk.X, padx=8)
+        self.holders["spi"] = tk.Frame(self.tab_spi); self.holders["spi"].pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
         # Графіки
         self.tab_ch = tk.Frame(self.nb); self.nb.add(self.tab_ch, text="Графіки")
         bar = tk.Frame(self.tab_ch, pady=4); bar.pack(fill=tk.X)
@@ -534,7 +581,9 @@ class WeatherWindow:
         frost = fl(self.frost_var, "Поріг заморозку")
         window = self._read_window(); years = self._read_years()
         st = W.default_settings()
-        st.update(gdd_base=base, gdd_upper=upper, frost_thr=frost, window=window, years=years, htc_method=HTC_METHODS[self.htc_var.get()])
+        try: lat, lon = self._coords(False)
+        except ValueError: lat = lon = None
+        st.update(gdd_base=base, gdd_upper=upper, frost_thr=frost, window=window, years=years, htc_method=HTC_METHODS[self.htc_var.get()], lat=lat, lon=lon)
         return st
 
     def _coords(self, required):
@@ -598,6 +647,8 @@ class WeatherWindow:
                     self._busy_off(); self._on_fetched(*payload)
                 elif kind == "norm":
                     self._busy_off(); self._on_norm(*payload)
+                elif kind == "spi":
+                    self._busy_off(); self._on_spi(*payload)
                 elif kind == "error":
                     self._busy_off(); self.status_var.set("Помилка.")
                     messagebox.showerror("Помилка отримання даних", payload, parent=self.win)
@@ -611,7 +662,7 @@ class WeatherWindow:
     def _on_fetched(self, ser, d0, d1):
         if len(ser) == 0:
             messagebox.showwarning("", "Джерело не повернуло жодної доби за цей період.", parent=self.win); return
-        self.series = ser; self.norm = None
+        self.series = ser; self.norm = None; self.spi = None
         if not self._years_touched:                            # роки порівняння за замовчуванням – роки завантаженого періоду
             self.y0_var.set(str(d0.year)); self.y1_var.set(str(d1.year))
         self.status_var.set(f"Отримано {len(ser)} діб. Дата отримання даних: {X.fmt_stamp(ser.meta.get('retrieved_at'))}")
@@ -629,7 +680,7 @@ class WeatherWindow:
         except ValueError as e:
             messagebox.showwarning("Перевірте параметри", str(e), parent=self.win); return
         try:
-            self.rep = W.build_report(self.series, st, norm=self.norm, periods=self.periods)
+            self.rep = W.build_report(self.series, st, norm=self.norm, periods=self.periods, spi=self.spi)
         except Exception as e:
             messagebox.showerror("Помилка розрахунку", str(e), parent=self.win); return
         self._refresh_all()
@@ -655,6 +706,7 @@ class WeatherWindow:
         for n, a, b in self.periods: self.per_list.insert(tk.END, f"{n}:  {a:%d.%m.%Y} – {b:%d.%m.%Y}")
         if self.rep["periods"]: self._fill_table(self.holders["periods"], X.spec_periods(self.rep))
         else: self._clear(self.holders["periods"])
+        self._fill_intl(); self._fill_spi()
         self._draw_chart(); self._fill_pub()
 
     @staticmethod
@@ -670,6 +722,7 @@ class WeatherWindow:
         headers, rows, classes = X.to_strings(spec, comma, compact=False)
         headers = [self.SHORT_HDR.get(h, h) for h in headers]       # на екрані коротше; в експорті – точні назви
         frm, tv = make_tv(holder, headers, rows, min_col=40)
+        tv.configure(height=6)             # мала «природна» висота: таблиця розтягується на всю вкладку, а смуги прокрутки (зокрема нижня) лишаються видимими
         frm.pack(fill=tk.BOTH, expand=True)
         fnt = tkfont.Font(family="Times New Roman", size=11)          # ущільнення: ширина за вмістом,
         for i, h in enumerate(headers):                               # остання колонка (умови) розтягується
@@ -716,6 +769,88 @@ class WeatherWindow:
     # ───────────────────────────────────────────────────────────
     # Норма й відхилення
     # ───────────────────────────────────────────────────────────
+    # ───────────────────────────────────────────────────────────
+    # Міжнародні індекси й SPI
+    # ───────────────────────────────────────────────────────────
+    def _fill_intl(self):
+        iv = self.rep["intl"]; notes = []
+        if iv["lat"] is None:
+            notes.append("Для вінограрських індексів і розрахунку ET₀ потрібна широта: оберіть місце досліду на карті або введіть координати, потім натисніть «Перерахувати».")
+        else:
+            if iv["pet_method"] in ("pm", "hs", "given"): notes.append(iv["pet_note"])
+            elif iv["pet_note"]: notes.append("ET₀ не розраховано: " + iv["pet_note"])
+        if iv["lat"] is not None and not iv["vine"]:
+            notes.append("Вінограрські індекси не розраховано: потрібні добові дані про температуру (tmax для Югліна) за весь сезон – з 1 квітня по 31 жовтня / 30 вересня "
+                         "(на південній півкулі – з 1 жовтня).")
+        if not iv["aridity"] and iv["pet_method"] != "none":
+            notes.append("Індекс сухості ЮНЕП визначається за повний календарний рік (з 1 січня по 31 грудня); у завантаженому періоді таких років немає. "
+                         "Для вегетаційного вікна P/ET₀ наведено в таблиці «За роками».")
+        notes.append("СЕТ у цій програмі відповідає GDD (growing degree days, поріг 10 °C); індекс Вінклера – це GDD за сезон. Колір класів видно в Excel, Word і при копіюванні таблиці.")
+        self.idx_note.configure(text="\n".join(notes))
+        for key, fn, rows in (("vine", X.spec_vine, iv["vine"]), ("aridity", X.spec_aridity, iv["aridity"])):
+            if rows: self._fill_table(self.holders[key], fn(self.rep))
+            else: self._clear(self.holders[key])
+
+    def _fill_spi(self):
+        sp = self.rep.get("spi")
+        if sp and sp["rows"]:
+            self._fill_table(self.holders["spi"], X.spec_spi(self.rep))
+            ws = sp["warnings"]
+            self.spi_note.configure(text=(" ".join(ws) + "\n" if ws else "") + f"Еталонний період {sp['ref'][0]}–{sp['ref'][1]}; масштаби {', '.join(str(k) for k in sp['scales'])} міс. "
+                                    "Класи: ≥ 2 екстремально волого; 1,5…1,99 дуже волого; 1…1,49 помірно волого; −0,99…0,99 норма; −1…−1,49 помірно сухо; −1,5…−1,99 дуже сухо; ≤ −2 екстремально сухо.")
+        else:
+            self._clear(self.holders["spi"])
+
+    def _clear_spi(self):
+        self.spi = None
+        if self.series is not None: self._recompute()
+
+    def _load_spi(self):
+        if self._busy: return
+        if self.series is None:
+            messagebox.showinfo("", "Спершу отримайте дані – вони задають період, для якого обчислюється SPI.", parent=self.win); return
+        try:
+            r0, r1 = int(self.sr0.get()), int(self.sr1.get())
+        except ValueError:
+            messagebox.showwarning("", "Еталонні роки мають бути цілими числами (наприклад, 1991 і 2020).", parent=self.win); return
+        scales = [k for k, v in self.spi_vars.items() if v.get()]
+        if not scales:
+            messagebox.showwarning("", "Оберіть хоча б один масштаб SPI (1, 3, 6 або 12 місяців).", parent=self.win); return
+        if r0 > r1 or r1 >= _dt.date.today().year:
+            messagebox.showwarning("", "Еталонні роки: «від» ≤ «до», і «до» – завершений рік.", parent=self.win); return
+        n = r1 - r0 + 1
+        if n < 20:
+            messagebox.showwarning("", f"Еталонний період із {n} років замалий: для SPI потрібно щонайменше 20 років для кожного календарного місяця (WMO рекомендує 30).", parent=self.win); return
+        study = (self.series.dates[0], self.series.dates[-1]); src = self.ctx["source"]
+        if src == "file":                                  # власні дані: беремо наявний ряд, без мережі
+            self._on_spi(W_indices.spi_table(self.series, (r0, r1), tuple(scales), study)); return
+        # ряд починаємо з року ПЕРЕД еталонним: для SPI-k перші місяці еталону потребують k − 1 попередніх місяців (до 11 для SPI-12)
+        first = _dt.date(min(r0 - 1, study[0].year), 1, 1); last = min(_dt.date.today(), _dt.date(max(r1, study[1].year), 12, 31))
+        n_req = last.year - first.year + 1
+        if not messagebox.askyesno("Запит довгого ряду", f"Для SPI буде завантажено добові дані NASA POWER за {first.year}–{last.year}: {n_req} запитів "
+                                   f"(орієнтовно {n_req * 2.5 / 60:.0f}–{n_req * 4 / 60:.0f} хв). Дані завантажуються щоразу заново. Продовжити?", parent=self.win):
+            return
+        self._busy_on(f"SPI: завантаження {first.year}–{last.year}…")
+        threading.Thread(target=self._spi_worker, args=(self.ctx["lat"], self.ctx["lon"], first, last, (r0, r1), tuple(scales), study), daemon=True).start()
+
+    def _spi_worker(self, lat, lon, first, last, ref, scales, study):
+        prog = lambda m: self._q.put(("progress", m))
+        try:
+            ser = W.fetch_nasa(lat, lon, first, last, progress=prog)
+            self._q.put(("spi", (W_indices.spi_table(ser, ref, scales, study),)))
+        except W.WeatherError as e:
+            self._q.put(("error", str(e)))
+        except Exception as e:
+            self._q.put(("error", f"Непередбачена помилка: {e}"))
+
+    def _on_spi(self, spi):
+        if not any(any(v == v for v in r["spi"].values()) for r in spi["rows"]):
+            messagebox.showwarning("SPI не розраховано", "\n".join(spi["warnings"]) or "Для обраного періоду немає даних, з яких можна обчислити SPI.", parent=self.win)
+            self.spi = None; self._recompute(); return
+        self.spi = spi
+        self.status_var.set(f"SPI розраховано: {len(spi['rows'])} місяців, масштаби {', '.join(str(k) for k in spi['scales'])}.")
+        self._recompute(); self.nb.select(self.tab_spi)
+
     def _clear_norm(self):
         self.norm = None; self._recompute()
 
@@ -944,14 +1079,14 @@ class WeatherWindow:
     def _copy_table(self, key):
         if self.rep is None:
             messagebox.showinfo("", "Спершу отримайте дані.", parent=self.win); return
-        spec = {"decades": X.spec_decades, "months": X.spec_months, "years": X.spec_years,
-                "periods": X.spec_periods}[key](self.rep)
+        spec = {"decades": X.spec_decades, "months": X.spec_months, "years": X.spec_years, "periods": X.spec_periods,
+                "vine": X.spec_vine, "aridity": X.spec_aridity, "spi": X.spec_spi}[key](self.rep)
         if spec["kind"] == "table" and not spec["rows"]:
             messagebox.showinfo("", "У цій таблиці немає рядків.", parent=self.win); return
         comma = self.comma_var.get()
-        headers, rows, classes = X.to_strings(spec, comma, compact=False)
+        headers, rows, classes, cell_fills = X.to_strings_ex(spec, comma, compact=False)
         fills = [("#" + X.HTC_FILL[c] if c in X.HTC_FILL else None) for c in classes] if classes else None
-        mode = SC.copy_table(self.win, headers, rows, fills, tsv=X.clipboard_text(spec, comma))
+        mode = SC.copy_table(self.win, headers, rows, fills, tsv=X.clipboard_text(spec, comma), cell_fills=cell_fills)
         self.status_var.set("Таблицю скопійовано разом із сіткою й кольорами – вставте у Word чи Excel (Ctrl+V)." if mode == "html" else
                             "Таблицю скопійовано як текст. Сітку таблиці в Word дає копіювання у Windows; або скористайтеся кнопкою «Word» угорі.")
 
@@ -990,7 +1125,7 @@ class WeatherWindow:
         try:
             figs = []
             names = dict(CH.CHARTS)
-            for kind in ("climo_decade", "walter", "htc_month", "years_cmp"):
+            for kind in ("climo_decade", "walter", "htc_month", "years_cmp", "vine", "spi"):
                 png = X.figure_png(self.rep, kind, c["place"], CH.build_chart, style=self.chart_style)
                 if png: figs.append((names[kind], png))
             X.export_docx(p, self.rep, X.make_meta(self.rep, c["place"], c["lat"], c["lon"], c["source"]),

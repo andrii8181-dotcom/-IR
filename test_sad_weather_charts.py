@@ -23,7 +23,9 @@ def legend_text(f): return " | ".join(t.get_text() for a in f.axes if a.get_lege
 
 print("== 1. Усі діаграми й легенди")
 for kind, title in CH.CHARTS:
-    f, r = build(kind); check(r is None and len(f.axes) >= 1, f"«{title}» будується")
+    f, r = build(kind)
+    if kind in ("vine", "spi"): check(r is not None and len(f.axes) == 1, f"«{title}» без широти / без SPI повертає пояснення замість діаграми: «{r[:60]}…»")
+    else: check(r is None and len(f.axes) >= 1, f"«{title}» будується")
 f, _ = build("climo_decade"); lt = legend_text(f)
 check("Середня температура" in lt and "крива" in lt and "ліва вісь" in lt and "Сума опадів" in lt and "стовпчики" in lt and "права вісь" in lt, f"декади: легенда пояснює, що крива – температура, стовпчики – опади: «{lt}»")
 f, _ = build("climo_daily"); lt = legend_text(f); check("Опади" in lt and "Середня температура" in lt and "Розмах" in lt, f"добова кліматограма: легенда з трьох складових: «{lt}»")
@@ -31,6 +33,43 @@ f, _ = build("years_cmp"); lt = legend_text(f); check("Середня темпе
 f, _ = build("walter"); lt = legend_text(f); check("Вологий" in lt and "Посушливий" in lt and "Температура" in lt and "Опади" in lt, "діаграма Вальтера: легенда")
 f, _ = build("htc_month"); check("посуха" in legend_text(f) or "волого" in legend_text(f), "ГТК: легенда класів")
 f, _ = build("cum_prec"); check(all(str(y) in legend_text(f) for y in (2021, 2022, 2023, 2024)), "нагромаджені опади: легенда за роками")
+
+print("\n== 1б. Вінклер/Югліна та SPI")
+import sad_weather_indices as WI
+n2 = 365 * 38 + 10; d02 = dt.date(1988, 1, 1); dts2 = [d02 + dt.timedelta(days=i) for i in range(n2)]; dy2 = np.array([d.timetuple().tm_yday for d in dts2], float)
+rg3 = np.random.default_rng(8); t2 = 10.5 + 11.5 * np.sin(2 * np.pi * (dy2 - 110) / 365) + rg3.normal(0, 2.2, n2)
+ser2 = W.DailySeries(dts2, {"tmean": t2, "tmax": t2 + 5, "tmin": t2 - 5, "prec": np.where(rg3.random(n2) < .32, rg3.gamma(1.4, 5.5, n2), 0.), "rad": np.full(n2, 15.0), "wind": np.full(n2, 2.5), "rh": np.full(n2, 70.0)})
+st2 = W.default_settings(); st2["lat"] = 48.75; sp2 = WI.spi_table(ser2, ref=(1991, 2020), scales=(1, 3, 12), study=(dt.date(2021, 1, 1), dt.date(2024, 12, 31)))
+rep2 = W.build_report(ser2.slice(dt.date(2015, 1, 1), dt.date(2024, 12, 31)), st2, spi=sp2)
+def build2(kind, style=None): f = Figure(dpi=100); r = CH.build_chart(f, kind, rep2, "м. Умань", style); return f, r
+f, r = build2("vine"); check(r is None and len(f.axes) == 2, "діаграма Вінклера й Югліна: 2 панелі"); lt = legend_text(f)
+check("Вінклера" in lt and "Югліна" in lt and "Межі класів" in lt, f"легенда: «{lt}»")
+check(f.axes[0].get_xlim()[1] > len(rep2["intl"]["vine"]) - 0.4, "праворуч залишено поле для підписів меж класів")
+check(len(f.axes[0].patches) == len(rep2["intl"]["vine"]) and len(f.axes[1].patches) == len(rep2["intl"]["vine"]), "стовпчик на кожен сезон в обох панелях")
+check(any("→ " in t.get_text() for t in f.axes[1].texts), "підписано межі класів Югліна (→ HI−2 тощо)")
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+rend = FigureCanvasAgg(f).get_renderer(); overlaps = []
+for ax in f.axes:
+    lg = ax.get_legend(); lb = lg.get_window_extent(rend)
+    for t_ in ax.texts:
+        if "→" not in t_.get_text() and lb.overlaps(t_.get_window_extent(rend)): overlaps.append(t_.get_text())
+check(not overlaps, f"легенда не перекриває підписи значень над стовпчиками (перекриттів: {len(overlaps)})")
+f, r = build2("vine", {"colors": {"vine": {"winkler": "#00aa00", "huglin": "#0000cc"}}})
+check(any(mc.same_color(p.get_facecolor()[:3], "#00aa00") for p in f.axes[0].patches) and any(mc.same_color(p.get_facecolor()[:3], "#0000cc") for p in f.axes[1].patches), "кольори стовпчиків Вінклера й Югліна налаштовуються")
+f, r = build2("spi"); check(r is None and len(f.axes) == 3, "SPI: окрема панель для кожного з 3 масштабів"); lt = legend_text(f)
+check("Вологі" in lt and "Сухі" in lt and "Межі класів" in lt, f"легенда SPI: «{lt}»")
+sub_ = f.axes[0].get_title(loc="left"); check("01.2021–12.2024" in sub_ and "1991–2020" in sub_ and "2015" not in sub_, "підзаголовок SPI показує місяці SPI (2021–2024), а не весь завантажений ряд")
+z1 = np.array([r_["spi"][1] for r_ in sp2["rows"]]); bars = f.axes[0].patches
+check(len(bars) == 2 * len(z1) and sum(1 for p_, z_ in zip(bars[:len(z1)], z1) if z_ >= 0 and p_.get_height() > 0) == int((z1 >= 0).sum()), "додатні SPI – вгору, від'ємні – вниз")
+f, r = build2("spi", {"colors": {"spi": {"wet": "#00aa00", "dry": "#aa00aa"}}}); check(any(mc.same_color(p.get_facecolor()[:3], "#00aa00") for p in f.axes[0].patches) and any(mc.same_color(p.get_facecolor()[:3], "#aa00aa") for p in f.axes[0].patches), "кольори вологих і сухих місяців SPI налаштовуються")
+f, r = build2("spi", {"general": {"legend_loc": "без легенди"}}); check(legend_text(f) == "", "SPI: легенду можна вимкнути")
+sp_none = {"rows": [], "scales": [1], "ref": (1991, 2020), "n_ref": {1: 0}, "warnings": [], "params": {}}; rep_ns = dict(rep2); rep_ns["spi"] = sp_none; fn_ = Figure(); check(CH.build_chart(fn_, "spi", rep_ns, "x") is not None, "порожній SPI → пояснення")
+rep_nl = W.build_report(ser2.slice(dt.date(2015, 1, 1), dt.date(2024, 12, 31)), W.default_settings()); fnl = Figure(); res_ = CH.build_chart(fnl, "vine", rep_nl, "x"); check(res_ and "широта" in res_, "Вінклер без широти → пояснення, що обрати місце")
+part_ = ser2.slice(dt.date(2022, 6, 1), dt.date(2023, 3, 31)); rep_p = W.build_report(part_, st2); fpp = Figure(); res_ = CH.build_chart(fpp, "vine", rep_p, "x")
+check(res_ is not None and "повним покриттям" in res_, "ряд без жодного повного сезону (червень 2022 – березень 2023) → пояснення, чому діаграми немає")
+full_ = ser2.slice(dt.date(2022, 6, 1), dt.date(2024, 3, 31)); rep_f = W.build_report(full_, st2); ff_ = Figure()
+check(CH.build_chart(ff_, "vine", rep_f, "x") is None and len(rep_f["intl"]["vine"]) == 1 and rep_f["intl"]["vine"][0]["label"] == "2023", "а якщо в ряді є один повний сезон (2023) – діаграма будується з одним стовпчиком")
+check(all(len(CH.components(k, rep2)) >= 2 for k in ("vine", "spi")) and [c[0] for c in CH.components("vine")] == ["winkler", "huglin", "bounds"] and [c[0] for c in CH.components("spi")] == ["wet", "dry", "lim"], "складові для налаштування кольорів нових діаграм")
 
 print("\n== 2. Стиль: загальні параметри")
 G = CH.sanitize_general({})

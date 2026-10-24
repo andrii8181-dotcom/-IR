@@ -17,6 +17,8 @@ CHARTS = [
     ("htc_decade", "ГТК за декадами"),
     ("htc_month", "ГТК за місяцями"),
     ("years_cmp", "Порівняння років (температура й опади у вікні)"),
+    ("vine", "Вінклер і Югліна за сезонами"),
+    ("spi", "SPI за місяцями"),
 ]
 
 HTC_COLORS = {"d4": "#a50f15", "d3": "#de2d26", "d2": "#fb6a4a", "d1": "#fcae91",
@@ -116,6 +118,11 @@ def components(kind, rep=None):
     if kind == "years_cmp":
         return [("temp", "Температура (точки)", "#b2182b"), ("stem", "Температура (стебла)", "#f4a582"),
                 ("prec", "Опади (стовпчики)", "#4393c3"), ("norm", "Норма (пунктир)", "#333333")]
+    if kind == "vine":
+        return [("winkler", "Індекс Вінклера (стовпчики)", "#d98c3f"), ("huglin", "Індекс Югліна (стовпчики)", "#8c4f9e"),
+                ("bounds", "Межі класів (пунктир)", "#666666")]
+    if kind == "spi":
+        return [("wet", "Вологі місяці (SPI > 0)", "#2166ac"), ("dry", "Сухі місяці (SPI < 0)", "#b2182b"), ("lim", "Межі класів ±1, ±2 (пунктир)", "#777777")]
     return []
 
 
@@ -171,7 +178,7 @@ def build_chart(fig, kind, rep, place="", style=None):
         fig.clear()
         fn = {"climo_daily": _climo_daily, "climo_decade": _climo_decade, "walter": _walter,
               "cum_prec": _cum_prec, "cum_set": _cum_set, "htc_decade": _htc_decade,
-              "htc_month": _htc_month, "years_cmp": _years_cmp}.get(kind)
+              "htc_month": _htc_month, "years_cmp": _years_cmp, "vine": _vine, "spi": _spi}.get(kind)
         if fn is None:
             return "Невідомий тип діаграми."
         try:
@@ -404,4 +411,63 @@ def _years_cmp(fig, rep, place, st):
     _legend(ax1, st, h1, default_loc="upper right"); _legend(ax2, st, h2, default_loc="upper right")
     _title(ax1, st, rep, place, f"Порівняння років за вікном {d1:02d}.{m1:02d}–{d2:02d}.{m2:02d}",
            sub_override=place or "")
+    fig.tight_layout()
+
+
+def _vine(fig, rep, place, st):
+    iv = rep.get("intl") or {}; rows = iv.get("vine") or []
+    if not rows:
+        if iv.get("lat") is None: return "Для вінограрських індексів потрібна широта: оберіть місце досліду на карті."
+        return "Немає сезонів із повним покриттям: потрібні добові дані за весь сезон (1 квітня – 31 жовтня для індексу Вінклера, 1 квітня – 30 вересня для Югліна)."
+    import sad_weather_indices as WI
+    south = iv["lat"] < 0
+    xs = np.arange(len(rows)); labels = [r["label"] for r in rows]
+    c_w, c_h, c_b = st.col("winkler", "#d98c3f"), st.col("huglin", "#8c4f9e"), st.col("bounds", "#666666")
+    ax1 = fig.add_subplot(211); ax2 = fig.add_subplot(212, sharex=ax1)
+    wv = [r["winkler"] for r in rows]; hv = [r["huglin"] for r in rows]
+    ax1.bar(xs, [0 if math.isnan(v) else v for v in wv], color=c_w, width=0.6)
+    ax2.bar(xs, [0 if math.isnan(v) else v for v in hv], color=c_h, width=0.6)
+    for ax, vals, fmt in ((ax1, wv, "{:.0f}"), (ax2, hv, "{:.0f}")):
+        for x, v in zip(xs, vals):
+            if not math.isnan(v): ax.text(x, v, fmt.format(v), ha="center", va="bottom", fontsize=max(5.0, st.g["tick_size"] - 1))
+    top1 = max([v for v in wv if not math.isnan(v)] + [WI.WINKLER_BOUNDS_C[0]]); top2 = max([v for v in hv if not math.isnan(v)] + [1500.0])
+    names = ["I", "II", "III", "IV", "V"]
+    for b, nm in zip(WI.WINKLER_BOUNDS_C, names[1:]):
+        if b < top1 * 1.25: ax1.axhline(b, color=c_b, ls=":", lw=0.9); ax1.text(len(rows) - 0.4 + 0.85, b, f"→ {nm}", va="bottom", ha="right", fontsize=max(5.0, st.g["tick_size"] - 1), color=c_b)
+    for (hi, code, _n) in WI.HUGLIN_CLASSES[:-1]:
+        if hi < top2 * 1.25: ax2.axhline(hi, color=c_b, ls=":", lw=0.9); ax2.text(len(rows) - 0.4 + 0.85, hi, f"→ {WI.huglin_class(hi + 0.001)[0]}", va="bottom", ha="right", fontsize=max(5.0, st.g["tick_size"] - 1), color=c_b)
+    k_head = 1.25 if LEGEND_LOCS[st.g["legend_loc"]] in ("none", "below") else 1.6                             # запас під легенду всередині діаграми
+    ax1.set_ylim(0, top1 * k_head); ax2.set_ylim(0, top2 * k_head); ax1.set_xlim(-0.6, len(rows) - 0.4 + 0.9)  # поле справа для підписів класів
+    ax1.set_ylabel("Вінклер (GDD), °C·діб"); ax2.set_ylabel("Югліна (HI)")
+    ax2.set_xticks(xs); ax2.set_xticklabels(labels, rotation=0 if len(rows) < 12 else 45, ha="center" if len(rows) < 12 else "right")
+    hb = Line2D([0], [0], color=c_b, ls=":", lw=1.2, label="Межі класів (Вінклер I–V; Югліна HI−3…HI+3)")
+    _legend(ax1, st, [Patch(facecolor=c_w, label="Індекс Вінклера (GDD >10 °C)"), hb], default_loc="upper left")
+    _legend(ax2, st, [Patch(facecolor=c_h, label="Індекс Югліна (HI)"), hb], default_loc="upper left")
+    per = "1.10–30.04 / 1.10–31.03" if south else "1.04–31.10 / 1.04–30.09"
+    _title(ax1, st, rep, place, f"Вінклер і Югліна за сезонами ({per})", sub_override=f"{place + ', ' if place else ''}широта {str(round(abs(iv['lat']), 2)).replace('.', ',')}° {'пд.' if south else 'пн.'}")
+    fig.tight_layout()
+
+
+def _spi(fig, rep, place, st):
+    sp = rep.get("spi")
+    if not sp or not sp.get("rows") or not any(any(v == v for v in r["spi"].values()) for r in sp["rows"]):
+        return "SPI ще не розраховано: на вкладці «SPI» натисніть «Завантажити й обчислити SPI»."
+    ks = [k for k in sp["scales"] if any(r["spi"][k] == r["spi"][k] for r in sp["rows"])]
+    c_w, c_d, c_l = st.col("wet", "#2166ac"), st.col("dry", "#b2182b"), st.col("lim", "#777777")
+    rows = sp["rows"]; xs = np.arange(len(rows)); step = max(1, len(rows) // 24)
+    axes = []
+    for i, k in enumerate(ks):
+        ax = fig.add_subplot(len(ks), 1, i + 1, sharex=axes[0] if axes else None); axes.append(ax)
+        z = np.array([r["spi"][k] for r in rows], float); zz = np.nan_to_num(z)
+        ax.bar(xs, np.where(zz >= 0, zz, 0), color=c_w, width=0.85); ax.bar(xs, np.where(zz < 0, zz, 0), color=c_d, width=0.85)
+        for lim in (-2, -1, 1, 2): ax.axhline(lim, color=c_l, ls=":", lw=0.8)
+        ax.axhline(0, color="#444", lw=0.7)
+        top = max(2.5, float(np.nanmax(np.abs(z))) * 1.1) if np.any(~np.isnan(z)) else 2.5; ax.set_ylim(-top, top)
+        ax.set_ylabel(f"SPI-{k}")
+        if i < len(ks) - 1: ax.tick_params(labelbottom=False)
+    axes[-1].set_xticks(xs[::step]); axes[-1].set_xticklabels([rows[j]["label"] for j in xs[::step]], rotation=45, ha="right", fontsize=max(5.0, st.g["tick_size"] - 1))
+    _legend(axes[0], st, [Patch(facecolor=c_w, label="Вологі місяці (SPI > 0)"), Patch(facecolor=c_d, label="Сухі місяці (SPI < 0)"),
+                          Line2D([0], [0], color=c_l, ls=":", label="Межі класів ±1, ±2")], default_loc="upper left", ncol=3)
+    _title(axes[0], st, rep, place, f"SPI за місяцями (еталонний період {sp['ref'][0]}–{sp['ref'][1]})",
+           sub_override=f"{place + ', ' if place else ''}{rows[0]['label']}–{rows[-1]['label']}")
     fig.tight_layout()

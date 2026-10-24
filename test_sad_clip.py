@@ -17,6 +17,10 @@ check("background:#e2efda" in h and "background:#ddebf7" in h and h.count("backg
 check("background:#D9E2F3" in h and "font-weight:bold" in h, "заголовок виділено")
 check(re.search(r"<td[^>]*text-align:left;[^>]*>2021", h) is not None and re.search(r"<td[^>]*text-align:center;[^>]*>15,5", h) is not None, "перший стовпець ліворуч, числа по центру")
 check("</td><td" in h and "None" not in h and "<td" in h, "порожні значення (None, '') не перетворюються на текст «None»")
+hc = C.build_html_table(H, R, fills=["#e2efda", None, "#ddebf7"], cell_fills=[{1: "#ff0000"}, {3: "#00ff00"}, {}])
+check(hc.count("background:#ff0000") == 1 and hc.count("background:#e2efda") == 3 and hc.count("background:#00ff00") == 1 and hc.count("background:#ddebf7") == 4,
+      "заливка окремих клітинок має перевагу над кольором рядка; решта клітинок рядка зберігає колір рядка")
+check(C.build_html_table(H, R, cell_fills=[{}, {}, {}]).count("background:") == 4 and "background:#" not in C.build_html_table(H, R).replace("#D9E2F3", ""), "без заливок лише заголовок має фон")
 print("\n== 2. Формат буфера CF_HTML")
 d = C.cf_html(h)
 hd, frag = C.parse_cf_html(d)

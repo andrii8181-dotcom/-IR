@@ -364,6 +364,36 @@ check([y for y, *_ in ok_p] == [2023, 2024] and [y for y, *_ in sk_p] == [2022],
 st["years"] = None; ws = W.weather_set(W.build_report(big, st), "тест"); check(sorted(ws["years"]) == ["2021", "2022", "2023", "2024"], "погодний набір містить усі роки без обмеження")
 st["years"] = (2022, 2022); check(sorted(W.weather_set(W.build_report(big, st), "тест")["years"]) == ["2022"], "погодний набір обмежується роками порівняння")
 
+print("\n== 17. Міжнародні показники у звіті")
+import sad_weather_indices as WI
+st0 = W.default_settings()
+check(st0["lat"] is None and st0["lon"] is None and st0["elev"] is None, "у налаштуваннях за замовчуванням координат немає")
+rg17 = np.random.default_rng(17); n17 = 365 * 3; d17 = [D(2021, 1, 1) + dt.timedelta(days=i) for i in range(n17)]
+doy17 = np.array([d.timetuple().tm_yday for d in d17], float); tm17 = 10 + 11 * np.sin(2 * np.pi * (doy17 - 110) / 365) + rg17.normal(0, 2, n17)
+s17 = W.DailySeries(d17, {"tmean": tm17, "tmax": tm17 + 5, "tmin": tm17 - 5, "prec": np.where(rg17.random(n17) < .3, rg17.gamma(1.4, 5.0, n17), 0.), "rad": np.full(n17, 15.0), "wind": np.full(n17, 2.5), "rh": np.full(n17, 70.0)},
+                    {"grid_elevation_m": 212.0})
+r0 = W.build_report(s17, st0)
+check(r0["series"] is s17 and r0["intl"]["pet_method"] == "none" and r0["intl"]["vine"] == [] and r0["intl"]["aridity"] == [] and not r0["series"].has("et0"), "без широти: звіт працює як раніше, ET₀ не додається, ряд той самий об'єкт")
+check(math.isnan(r0["total"]["ai"]) and all(math.isnan(r["ai"]) for r in r0["years"]), "без ET₀ індекс P/ET₀ = NaN (не нуль)")
+st1 = dict(st0); st1["lat"] = 48.75; r1 = W.build_report(s17, st1)
+check(r1["series"] is not s17 and r1["series"].has("et0") and not s17.has("et0") and r1["series"].meta["et0_method"] == "pm", "з широтою: ET₀ додано до робочої копії; вихідний ряд користувача не змінено")
+check(np.allclose(r1["series"].get("tmean"), s17.get("tmean")) and r1["series"].dates == s17.dates and r1["series"].get("prec").tolist() == s17.get("prec").tolist(), "інші змінні робочої копії ідентичні вихідним")
+check(abs(r1["total"]["ai"] - r1["total"]["prec_sum"] / r1["total"]["et0_sum"]) < 1e-12 and all(abs(r["ai"] - r["prec_sum"] / r["et0_sum"]) < 1e-12 for r in r1["years"]), "P/ET₀ = опади / ET₀ для всього періоду й кожного року")
+check(abs(r1["total"]["water_balance"] - (r1["total"]["prec_sum"] - r1["total"]["et0_sum"])) < 1e-6 and not math.isnan(r1["total"]["water_balance"]), "водний баланс (опади – ET₀) тепер розраховується й для NASA POWER")
+check([r["year"] for r in r1["intl"]["aridity"]] == [2021, 2022, 2023] and [r["label"] for r in r1["intl"]["vine"]] == ["2021", "2022", "2023"], "індекс сухості й вінограрські індекси – за повними роками/сезонами")
+check(abs(r1["intl"]["aridity"][0]["ai"] - r1["intl"]["aridity"][0]["prec"] / r1["intl"]["aridity"][0]["pet"]) < 1e-12, "AI у таблиці = P / PET")
+notes = W.quality_notes(r1["series"], "nasa", D(2021, 1, 1), D(2023, 12, 30), today=D(2030, 1, 1))
+check(any("Пенман–Монтейт" in n for n in notes) and any("2 м" in n for n in notes), "примітки про якість містять метод ET₀")
+check(not any("Пенман" in n for n in W.quality_notes(s17, "nasa", D(2021, 1, 1), D(2023, 12, 30), today=D(2030, 1, 1))), "без розрахунку ET₀ такої примітки немає")
+st2 = dict(st1); st2["elev"] = 0.0; r2 = W.build_report(s17, st2)
+check(r2["total"]["et0_sum"] != r1["total"]["et0_sum"], "висота над рівнем моря з налаштувань змінює ET₀ (тиск, Rso)")
+par17 = W.methods_paragraph(s17, D(2021, 1, 1), D(2023, 12, 31), 48.75, 30.22, "nasa", 10.0, "decade")
+check("growing degree days, GDD" in par17, "у методиці вказано, що СЕТ = GDD (англійський термін для зарубіжних читачів)")
+rw = W.build_report(s17, st1, periods=[("тест", D(2022, 5, 1), D(2022, 6, 30)), ("поза", D(2030, 1, 1), D(2030, 1, 5))])
+check(abs(rw["periods"][0]["ai"] - rw["periods"][0]["prec_sum"] / rw["periods"][0]["et0_sum"]) < 1e-12 and "ai" not in rw["periods"][1], "довільні періоди: P/ET₀ є, а для періоду без даних – немає")
+rsp = W.build_report(s17, st1, spi={"rows": [], "scales": [1]}); check(rsp["spi"] == {"rows": [], "scales": [1]} and r1["spi"] is None, "SPI передається у звіт без змін; за замовчуванням None")
+ws17 = W.weather_set(r1, "тест"); check("ai" in ws17["years"]["2022"] and any(i["key"] == "ai" for i in ws17["indicators"]), "погодний набір для аналізів містить P/ET₀")
+
 print("\n" + "=" * 56)
 if FAIL:
     print(f"ПРОВАЛІВ: {len(FAIL)}")

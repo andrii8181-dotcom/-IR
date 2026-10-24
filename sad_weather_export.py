@@ -3,9 +3,36 @@
 import io, math, datetime as dt
 import numpy as np
 import sad_weather_core as W
+import sad_weather_indices as WI
 
 HTC_FILL = {"d4": "F4B6B6", "d3": "F8CBAD", "d2": "FCE4D6", "d1": "FFF2CC",
             "ok": "E2EFDA", "wet": "DDEBF7", "na": "FFFFFF"}
+
+
+SPI_FILL = {"екстремально сухо": "F4B6B6", "дуже сухо": "F8CBAD", "помірно сухо": "FCE4D6", "норма": None,
+            "помірно волого": "DDEBF7", "дуже волого": "BDD7EE", "екстремально волого": "9DC3E6"}
+AI_FILL = {"гіперарідний": "F4B6B6", "арідний": "F8CBAD", "напівзасушливий": "FCE4D6", "сухий субвологий": "FFF2CC", "вологий": "E2EFDA"}
+WK_FILL = {"I": "DDEBF7", "II": "E2EFDA", "III": "FFF2CC", "IV": "FCE4D6", "V": "F8CBAD"}
+HI_FILL = {"HI−3": "9DC3E6", "HI−2": "DDEBF7", "HI−1": "E2EFDA", "HI+1": "FFF2CC", "HI+2": "FCE4D6", "HI+3": "F8CBAD"}
+
+
+def _cls_spi(v): c = WI.spi_class(v); return c, c
+def _cls_ai(v): c = WI.aridity_class(v); return c, c
+def _cls_wk(v): r = WI.winkler_region(v); return (r.split(" ")[0] if r else ""), r
+def _cls_hi(v):
+    code, name = WI.huglin_class(v); return code, (f"{code} ({name})" if code else "")
+
+
+# вид колонки → (функція класу, таблиця заливок); «_t» – текст класу замість числа
+CELL_KINDS = {"spi": (_cls_spi, SPI_FILL, "num"), "spi_t": (_cls_spi, SPI_FILL, "text"), "ai": (_cls_ai, AI_FILL, "num"), "ai_t": (_cls_ai, AI_FILL, "text"),
+              "wk": (_cls_wk, WK_FILL, "num"), "wk_t": (_cls_wk, WK_FILL, "text"), "hi": (_cls_hi, HI_FILL, "num"), "hi_t": (_cls_hi, HI_FILL, "text")}
+
+
+def cell_info(kind, v):
+    """→ (число чи None, текст класу, колір заливки hex без # або None) для колонок із кольоровим класом."""
+    if v is None or (isinstance(v, float) and math.isnan(v)): return None, "", None
+    clsfn, fills, _ = CELL_KINDS[kind]; key, text = clsfn(v)
+    return v, text, fills.get(key)
 
 
 def fnum(v, nd=1, comma=False, dash="–"):
@@ -34,7 +61,9 @@ def htc_label(v):
 def _opt_cols(rep, base_cols, full_only=True):
     s = rep["series"]
     cols = list(base_cols)
-    if s.has("et0"): cols.append(("ET₀, мм", lambda r: r["et0_sum"], 0, "num", False))
+    if s.has("et0"):
+        cols.append(("ET₀, мм", lambda r: r["et0_sum"], 0, "num", False))
+        cols.append(("P/ET₀", lambda r: r.get("ai", float("nan")), 2, "num", False))
     if s.has("rad"): cols.append(("Радіація, МДж/м²", lambda r: r["rad_sum"], 0, "num", False))
     return cols
 
@@ -67,7 +96,8 @@ def spec_total(rep):
     if s.has("rad"): rows.append(("Сумарна сонячна радіація, МДж/м²", t["rad_sum"], 0))
     if s.has("et0"):
         rows.append(("Еталонне випаровування ET₀, мм", t["et0_sum"], 0))
-        rows.append(("Водний баланс (опади − ET₀), мм", t["water_balance"], 0))
+        rows.append(("Водний баланс (опади – ET₀), мм", t["water_balance"], 0))
+        rows.append(("Індекс сухості P/ET₀ за період", t.get("ai", float("nan")), 2))
     return {"key": "total", "title": "Зведені показники за весь період", "kind": "kv", "rows": rows}
 
 
@@ -146,27 +176,60 @@ def spec_periods(rep):
             "kind": "table", "cols": cols, "rows": rep["periods"]}
 
 
+def spec_vine(rep):
+    iv = rep["intl"]; south = iv["lat"] is not None and iv["lat"] < 0
+    cols = [("Сезон", lambda r: r["label"], None, "text", True),
+            ("Вінклер (GDD >10 °C), °C·діб", lambda r: r["winkler"], 0, "wk", True),
+            ("Регіон за Вінклером", lambda r: r["winkler"], None, "wk_t", True),
+            ("Індекс Югліна (HI)", lambda r: r["huglin"], 0, "hi", True),
+            ("Клас за Югліном", lambda r: r["huglin"], None, "hi_t", True),
+            ("k (довжина дня)", lambda r: r["k"], 2, "num", False)]
+    per = "1.10–30.04 / 1.10–31.03" if south else "1.04–31.10 / 1.04–30.09"
+    lat_txt = f"{abs(iv['lat']):.2f}".replace(".", ",")
+    return {"key": "vine", "title": f"Вінограрські агрокліматичні індекси за сезонами (Вінклер / Югліна: {per}; широта {lat_txt}° {'пд.' if south else 'пн.'})",
+            "kind": "table", "cols": cols, "rows": iv["vine"]}
+
+
+def spec_aridity(rep):
+    cols = [("Рік", lambda r: r["year"], 0, "num", True), ("Опади, мм", lambda r: r["prec"], 0, "num", True),
+            ("ET₀ (PET), мм", lambda r: r["pet"], 0, "num", True), ("Індекс сухості P/ET₀", lambda r: r["ai"], 2, "ai", True),
+            ("Клас ЮНЕП", lambda r: r["ai"], None, "ai_t", True)]
+    return {"key": "aridity", "title": "Індекс сухості ЮНЕП за календарними роками (P/ET₀)", "kind": "table", "cols": cols, "rows": rep["intl"]["aridity"]}
+
+
+def spec_spi(rep):
+    sp = rep["spi"]; ks = sp["scales"]
+    cols = [("Місяць", lambda r: r["label"], None, "text", True), ("Опади, мм", lambda r: r["prec"], 0, "num", False)]
+    for i, k in enumerate(ks):
+        cols.append((f"SPI-{k}", (lambda r, k=k: r["spi"][k]), 2, "spi", True))
+        cols.append((f"Оцінка SPI-{k}", (lambda r, k=k: r["spi"][k]), None, "spi_t", i == len(ks) - 1))
+    return {"key": "spi", "title": f"SPI за місяцями (еталонний період {sp['ref'][0]}–{sp['ref'][1]}, гамма-розподіл)", "kind": "table", "cols": cols, "rows": sp["rows"]}
+
+
 def all_specs(rep):
     out = [spec_total(rep), spec_months(rep), spec_decades(rep)]
     if rep["years"]: out.append(spec_years(rep))
     if rep["periods"]: out.append(spec_periods(rep))
+    if rep.get("intl") and rep["intl"]["vine"]: out.append(spec_vine(rep))
+    if rep.get("intl") and rep["intl"]["aridity"]: out.append(spec_aridity(rep))
+    if rep.get("spi") and any(any(v == v for v in r["spi"].values()) for r in rep["spi"]["rows"]): out.append(spec_spi(rep))
     return out
 
 
-def to_strings(spec, comma=False, compact=False):
-    """→ (headers, rows[str], htc_classes[list|None])."""
+def to_strings_ex(spec, comma=False, compact=False):
+    """→ (headers, rows[str], htc_classes[list|None], cell_fills[list[dict стовпець→hex]])."""
     if spec["kind"] == "kv":
         rows = []
         for label, v, nd in spec["rows"]:
             rows.append([label, v if isinstance(v, str) else fnum(v, nd or 0, comma)])
-        return ["Показник", "Значення"], rows, None
+        return ["Показник", "Значення"], rows, None, [{} for _ in rows]
     cols = [c for c in spec["cols"] if (c[4] or not compact)]
     headers = [c[0] for c in cols]
-    rows, classes = [], []
+    rows, classes, fills = [], [], []
     for r in spec["rows"]:
-        row = []; cls = None
+        row = []; cls = None; cf = {}
         empty = r.get("empty", False)
-        for h, fn, nd, kind, _ in cols:
+        for j, (h, fn, nd, kind, _) in enumerate(cols):
             if empty and h not in ("Період", "Початок", "Кінець", "Діб"):
                 row.append("немає даних"); continue
             try: v = fn(r)
@@ -175,9 +238,19 @@ def to_strings(spec, comma=False, compact=False):
             elif kind == "date": row.append(f"{v:%d.%m.%Y}" if v else "")
             elif kind == "htc":
                 row.append(fnum(v, nd, comma)); cls = W.htc_class(v)[1]
+            elif kind in CELL_KINDS:
+                num, text, fill = cell_info(kind, v)
+                row.append(text if CELL_KINDS[kind][2] == "text" else fnum(num, nd or 0, comma))
+                if fill: cf[j] = "#" + fill
             else: row.append(fnum(v, nd, comma))
-        rows.append(row); classes.append(cls)
-    return headers, rows, classes
+        rows.append(row); classes.append(cls); fills.append(cf)
+    return headers, rows, classes, fills
+
+
+def to_strings(spec, comma=False, compact=False):
+    """→ (headers, rows[str], htc_classes[list|None])."""
+    h, r, c, _ = to_strings_ex(spec, comma, compact)
+    return h, r, c
 
 
 def clipboard_text(spec, comma=False, compact=False):
@@ -243,6 +316,8 @@ def make_meta(rep, place, lat, lon, source):
         rows.append(("Висота комірки сітки, м", f"{mt['grid_elevation_m']:.0f}"))
     if mt.get("timezone"): rows.append(("Часовий пояс (межі доби)", mt["timezone"]))
     if mt.get("time_standard"): rows.append(("Стандарт часу", mt["time_standard"]))
+    iv = rep.get("intl") or {}
+    if iv.get("pet_method") in ("pm", "hs", "given"): rows.append(("Еталонне випаровування ET₀", WI.PET_LABELS[iv["pet_method"]]))
     m1, d1, m2, d2 = st["window"]
     rows += [("Біологічний мінімум для СЕТ, °C", f"{st['gdd_base']:g}"),
              ("Облік активних температур у ГТК", {"decade": "декадний", "month": "місячний",
@@ -251,14 +326,67 @@ def make_meta(rep, place, lat, lon, source):
     return rows
 
 
+INTL_REFS = {
+    "fao56": "Allen R.G., Pereira L.S., Raes D., Smith M. Crop evapotranspiration – Guidelines for computing crop water requirements. FAO Irrigation and Drainage Paper 56. Rome: FAO, 1998.",
+    "hs85": "Hargreaves G.H., Samani Z.A. Reference crop evapotranspiration from temperature. Applied Engineering in Agriculture. 1985. Vol. 1, No. 2. P. 96–99.",
+    "unep": "World Atlas of Desertification. 2nd ed. / Ed. by N. Middleton, D. Thomas. London: Arnold; UNEP, 1997.",
+    "winkler": "Amerine M.A., Winkler A.J. Composition and quality of musts and wines of California grapes. Hilgardia. 1944. Vol. 15, No. 6. P. 493–675.",
+    "huglin": "Huglin P. Nouveau mode d'évaluation des possibilités héliothermiques d'un milieu viticole. Comptes Rendus de l'Académie d'Agriculture de France. 1978. Vol. 64. P. 1117–1126.",
+    "tonietto": "Tonietto J., Carbonneau A. A multicriteria climatic classification system for grape-growing regions worldwide. Agricultural and Forest Meteorology. 2004. Vol. 124. P. 81–97.",
+    "mckee": "McKee T.B., Doesken N.J., Kleist J. The relationship of drought frequency and duration to time scales. Proceedings of the 8th Conference on Applied Climatology. Boston: American Meteorological Society, 1993. P. 179–184.",
+    "wmo": "Standardized Precipitation Index User Guide (WMO-No. 1090). Geneva: World Meteorological Organization, 2012.",
+}
+
+
+def intl_text(rep):
+    """Абзац про міжнародні показники, що ДІЙСОВО розраховані в цьому звіті, і список літератури; посилання [n] нумеруються
+    за порядком першої появи в тексті. → (абзац або '', [рядки літератури])."""
+    iv = rep.get("intl") or {}; sp = rep.get("spi"); order = []
+
+    def c(*keys):
+        nums = []
+        for k in keys:
+            if k not in order: order.append(k)
+            nums.append(order.index(k) + 1)
+        return "[" + ", ".join(str(n) for n in sorted(set(nums))) + "]"
+    parts = []
+    if iv.get("pet_method") == "pm":
+        parts.append(f"Еталонне випаровування (ET₀) розраховано за рівнянням Пенмана–Монтейта {c('fao56')} за добовими значеннями температури, відносної вологості "
+                     f"повітря, швидкості вітру та сонячної радіації.")
+    elif iv.get("pet_method") == "hs":
+        parts.append(f"Еталонне випаровування (ET₀) розраховано за формулою Харгрівза–Самані {c('fao56', 'hs85')} за добовими значеннями максимальної й мінімальної "
+                     f"температури повітря (радіація, вітер чи вологість у даних відсутні).")
+    if iv.get("aridity"):
+        parts.append(f"Індекс сухості визначали як відношення річної суми опадів до річної суми ET₀ (P/ET₀) {c('unep')}: гіперарідний – менше 0,05; арідний – 0,05–0,20; "
+                     f"напівзасушливий – 0,20–0,50; сухий субвологий – 0,50–0,65; вологий – 0,65 і більше.")
+    if iv.get("vine"):
+        south = iv["lat"] is not None and iv["lat"] < 0
+        k_txt = f"{iv['vine'][0]['k']:.2f}".replace(".", ",")
+        parts.append(f"Індекс Вінклера {c('winkler')} (сума ефективних температур вище 10 °C за період "
+                     f"{'з 1 жовтня по 30 квітня' if south else 'з 1 квітня по 31 жовтня'}, GDD) оцінювали за регіонами I–V (межі 1389, 1667, 1944 і 2222 °C·діб, що відповідає "
+                     f"2500, 3000, 3500 і 4000 °F·діб). Геліотермічний індекс Югліна {c('huglin')} розраховували як суму "
+                     f"((tсер − 10) + (tmax − 10))/2 за добами {'з 1 жовтня по 31 березня' if south else 'з 1 квітня по 30 вересня'} з коефіцієнтом довжини дня k = "
+                     f"{k_txt}; класи – за {c('tonietto')}.")
+    if sp and any(any(v == v for v in r["spi"].values()) for r in sp["rows"]):
+        ks = ", ".join(str(k) for k in sp["scales"]); n_ref = min(sp["n_ref"].values()) if sp.get("n_ref") else 0
+        parts.append(f"Стандартизований індекс опадів (SPI) {c('mckee', 'wmo')} розраховано за місячними сумами опадів для масштабів {ks} міс.: до сум опадів окремо для кожного "
+                     f"календарного місяця підганяли гамма-розподіл методом максимальної правдоподібності (з урахуванням ймовірності нульових сум), еталонний період – "
+                     f"{sp['ref'][0]}–{sp['ref'][1]} (не менше {n_ref} років), і перетворювали на стандартне нормальне відхилення.")
+    refs = [f"{i}. {INTL_REFS[k]}" for i, k in enumerate(order, 1)]
+    return " ".join(parts), refs
+
+
 def publication_text(rep, place, lat, lon, source, extras=None):
     st = rep["settings"]; series = rep["series"]
     parts = ["МЕТОДИКА ЗБОРУ МЕТЕОДАНИХ",
              W.methods_paragraph(series, rep["d0"], rep["d1"], lat, lon, source,
                                  st["gdd_base"], st["htc_method"], extras)]
+    intl_par, intl_refs = intl_text(rep)
+    if intl_par: parts += ["", "МІЖНАРОДНІ АГРОКЛІМАТИЧНІ ПОКАЗНИКИ", intl_par]
     cites = W.citation_block(source)
     if cites:
         parts += ["", "ДЖЕРЕЛА ТА ПОДЯКА (вимагаються умовами використання даних)"] + cites
+    if intl_refs: parts += ["", "ЛІТЕРАТУРА ДО МІЖНАРОДНИХ ПОКАЗНИКІВ"] + intl_refs
     lic = W.licence_notice(source)
     if lic: parts += ["", "УМОВИ ВИКОРИСТАННЯ", lic]
     notes = W.quality_notes(series, source, rep["d0"], rep["d1"])
@@ -315,8 +443,8 @@ def export_xlsx(path, rep, meta_rows, pub_text, comma_unused=None):
     ws.column_dimensions["A"].width = 12
 
     for spec in all_specs(rep):
-        title = {"total": "Підсумок", "months": "Місяці", "decades": "Декади",
-                 "years": "За роками", "periods": "Періоди"}[spec["key"]]
+        title = {"total": "Підсумок", "months": "Місяці", "decades": "Декади", "years": "За роками", "periods": "Періоди",
+                 "vine": "Вінклер і Югліна", "aridity": "Індекс сухості", "spi": "SPI"}[spec["key"]]
         ws = wb.create_sheet(title)
         if spec["kind"] == "kv":
             ws.append(["Показник", "Значення"])
@@ -332,13 +460,16 @@ def export_xlsx(path, rep, meta_rows, pub_text, comma_unused=None):
         cols = spec["cols"]
         ws.append([c[0] for c in cols])
         for r in spec["rows"]:
-            empty = r.get("empty", False); vals = []; cls = None
+            empty = r.get("empty", False); vals = []; cls = None; cfills = {}
             for h, fn, nd, kind, _ in cols:
                 if empty and h not in ("Період", "Початок", "Кінець", "Діб"):
                     vals.append("немає даних"); continue
                 try: v = fn(r)
                 except Exception: v = None
                 if isinstance(v, float) and math.isnan(v): v = None
+                if kind in CELL_KINDS:
+                    num, text, fill = cell_info(kind, v)
+                    cfills[len(vals)] = fill; vals.append(text if CELL_KINDS[kind][2] == "text" else num); continue
                 vals.append(v)
                 if kind == "htc" and v is not None: cls = W.htc_class(v)[1]
             ws.append(vals)
@@ -346,6 +477,7 @@ def export_xlsx(path, rep, meta_rows, pub_text, comma_unused=None):
             for c, (h, fn, nd, kind, _) in zip(row_cells, cols):
                 c.font = body_font; c.border = border
                 if kind == "num" and nd is not None: c.number_format = "0" if nd == 0 else "0." + "0" * nd
+                if kind in CELL_KINDS and CELL_KINDS[kind][2] == "num" and nd is not None: c.number_format = "0" if nd == 0 else "0." + "0" * nd
                 if kind == "date": c.number_format = "DD.MM.YYYY"
                 if kind == "htc":
                     c.number_format = "0.00"
@@ -353,9 +485,11 @@ def export_xlsx(path, rep, meta_rows, pub_text, comma_unused=None):
             if cls:
                 for c, (h, *_r) in zip(row_cells, cols):
                     if h == "Умови зволоження": c.fill = PatternFill("solid", fgColor=HTC_FILL[cls])
+            for j, fill in cfills.items():
+                if fill: row_cells[j].fill = PatternFill("solid", fgColor=fill)
         style_header(ws, len(cols))
         for j, col in enumerate(cols, 1):
-            ws.column_dimensions[get_column_letter(j)].width = 24 if col[0] == "Умови зволоження" else \
+            ws.column_dimensions[get_column_letter(j)].width = 24 if col[0] in ("Умови зволоження", "Регіон за Вінклером", "Клас за Югліном", "Клас ЮНЕП") or col[0].startswith("Оцінка SPI") else \
                                                               max(11, min(18, len(col[0]) + 3))
 
     if rep.get("norm"):
@@ -431,8 +565,8 @@ def export_docx(path, rep, meta_rows, pub_text, figures, comma=True):
     n_tab = 0
     for spec in all_specs(rep):
         if spec["key"] == "total": continue
-        if spec["key"] == "decades" and len(spec["rows"]) > 45: continue   # надто довга для тексту – є в Excel
-        headers, rows, classes = to_strings(spec, comma, compact=True)
+        if spec["key"] in ("decades", "spi") and len(spec["rows"]) > 45: continue   # надто довга для тексту – є в Excel
+        headers, rows, classes, cfills = to_strings_ex(spec, comma, compact=True)
         if not rows: continue
         n_tab += 1
         para(f"Таблиця {n_tab} – {spec['title']}", italic=True, space_after=3)
@@ -449,6 +583,7 @@ def export_docx(path, rep, meta_rows, pub_text, figures, comma=True):
                 c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER if j else WD_ALIGN_PARAGRAPH.LEFT
                 if classes and classes[i - 1] and headers[j] in ("ГТК", "Умови зволоження"):
                     shade(c, HTC_FILL[classes[i - 1]])
+                elif cfills[i - 1].get(j): shade(c, cfills[i - 1][j][1:])
         para("", space_after=6)
 
     for k, (cap, png) in enumerate(figures, 1):
@@ -456,8 +591,8 @@ def export_docx(path, rep, meta_rows, pub_text, figures, comma=True):
         doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
         para(f"Рис. {k} – {cap}", align="center", size=11)
 
-    headings = {"ДЖЕРЕЛА": "Джерела даних", "ПРИМІТКИ": "Примітки щодо якості даних",
-                "ШКАЛА": "Шкала вологозабезпеченості за ГТК"}
+    headings = {"МІЖНАРОДНІ": "Міжнародні агрокліматичні показники", "ДЖЕРЕЛА": "Джерела даних", "ЛІТЕРАТУРА": "Література до міжнародних показників",
+                "ПРИМІТКИ": "Примітки щодо якості даних", "ШКАЛА": "Шкала вологозабезпеченості за ГТК"}
     for blk in blocks[1:]:
         lines = blk.split("\n")
         key = next((k for k in headings if lines and lines[0].startswith(k)), None)
