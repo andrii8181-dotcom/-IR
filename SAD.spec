@@ -14,6 +14,11 @@ for fn in ("Logo.png", "logo.png", "SAD_logo.png", "icon.ico"):
     p = os.path.join(here, fn)
     if os.path.exists(p):
         datas.append((p, "."))
+# Карта світу (Natural Earth): без неї програма збереться, але кнопка «Обрати на карті» не працюватиме – тому збірка зупиняється
+_map = os.path.join(here, "sad_worldmap.npz")
+if not os.path.exists(_map):
+    raise SystemExit("Не знайдено sad_worldmap.npz (карта світу) – покладіть його поруч із main.py або згенеруйте: python tools/build_worldmap_data.py")
+datas.append((_map, "."))
 icon = os.path.join(here, "icon.ico")
 icon = icon if (sys.platform == "win32" and os.path.exists(icon)) else None
 

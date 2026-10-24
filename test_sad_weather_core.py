@@ -1,8 +1,7 @@
-# test_sad_weather_core.py — перевірка ядра модуля «Погода» (без мережі й без tkinter)
+# test_sad_weather_core.py – перевірка ядра модуля «Погода» (без мережі й без tkinter)
 # Запуск:  python test_sad_weather_core.py
 import os, sys, json, math, tempfile, shutil, datetime as dt
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-os.environ["SAD_WEATHER_CACHE"] = tempfile.mkdtemp(prefix="sadw_cache_")
 import numpy as np
 import sad_weather_core as W
 
@@ -37,7 +36,7 @@ for txt, kind in [("91","lat"), ("abc","lat"), ("","lat"), ("181","lon"), ("48°
     except ValueError: check(True, f"{txt!r} ({kind}) відхилено")
 
 # ─────────────────────────────────────────────────────────
-print("\n== 2. ГТК — відтворення прикладів джерела (табл. 6.1, декадний облік)")
+print("\n== 2. ГТК – відтворення прикладів джерела (табл. 6.1, декадний облік)")
 Y = 2023
 dec = [  # (початок, кінець, tсер, опади)
  (D(Y,4,1),D(Y,4,10),10.8,15.6),(D(Y,4,11),D(Y,4,20),8.5,11.0),(D(Y,4,21),D(Y,4,30),12.3,4.2),
@@ -63,10 +62,10 @@ check(close(whole["sum_t"], 1372.5, 1e-6), f"Σt за період = 1372,5 (д�
 check(round(whole["htc"], 1) == 1.0 and W.htc_class(whole["htc"])[0] == "достатньо волого",
       f"ГТК за період {whole['htc']:.3f} → «{W.htc_class(whole['htc'])[0]}» (джерело: період достатньо вологий)")
 naive = W.htc(ser.get("prec"), ser.get("tmean"), "calendar")
-check(round(naive["htc"], 1) == 0.9, f"Контроль: наївне «все за всі доби» дало б {naive['htc']:.3f}→0,9 — інший висновок, "
+check(round(naive["htc"], 1) == 0.9, f"Контроль: наївне «все за всі доби» дало б {naive['htc']:.3f}→0,9 – інший висновок, "
       f"тому нашу реалізацію зроблено за джерелом")
 
-print("\n== 3. ГТК — табл. 6.2 (місячний облік)")
+print("\n== 3. ГТК – табл. 6.2 (місячний облік)")
 mon = [(D(Y,4,1),D(Y,4,30),10.5,55.3),(D(Y,5,1),D(Y,5,31),16.4,50.9),(D(Y,6,1),D(Y,6,30),21.0,53.6),
        (D(Y,7,1),D(Y,7,31),24.0,37.6),(D(Y,8,1),D(Y,8,31),23.1,36.0),(D(Y,9,1),D(Y,9,30),17.0,38.2)]
 ser2 = const_series(mon)
@@ -134,7 +133,7 @@ tm = [2]*20 + [6, 4, 6, 7, 8, 9, 8, 9, 10, 11] + [12]*10 + [8]*20
 ser4 = W.DailySeries([D(2024,3,1)+dt.timedelta(days=i) for i in range(n)], {"tmean": tm})
 td = W.threshold_dates(ser4, 5.0, run=5)
 check(td["start"] == D(2024,3,23), f"початок ≥5 °C: {td['start']} (перші 5 діб поспіль з 23.03)")
-check(td["end"] == ser4.dates[-1] and td["end_after_window"], "кінець — за межами вікна → позначено")
+check(td["end"] == ser4.dates[-1] and td["end_after_window"], "кінець – за межами вікна → позначено")
 tdw = W.threshold_dates(W.DailySeries([D(2024,3,1)+dt.timedelta(days=i) for i in range(10)], {"tmean":[9]*10}), 5.0)
 check(tdw["start_before_window"], "якщо ряд починається вже вище порога → «до початку вікна»")
 check(W.threshold_dates(W.DailySeries([D(2024,3,1)+dt.timedelta(days=i) for i in range(10)], {"tmean":[1]*10}), 5.0)["start"] is None,
@@ -170,26 +169,8 @@ for bad in [{}, {"properties": {}}, {"messages": ["Parameter(s) invalid"]}]:
     try: W.parse_nasa(bad); check(False, "некоректна відповідь мала б дати помилку")
     except W.WeatherError: check(True, f"некоректна відповідь {str(bad)[:40]} → WeatherError")
 
-print("\n== 10. Open-Meteo: розбір, null, одиниці")
-def om_payload(d0, n, drop=None, with_error=False):
-    ds = [(d0 + dt.timedelta(days=i)).isoformat() for i in range(n)]
-    daily = {"time": ds, "temperature_2m_mean": [12.0]*n, "temperature_2m_max": [18.0]*n,
-             "temperature_2m_min": [6.0]*n, "precipitation_sum": [0.0, None, 2.5, 0.0, 1.0][:n] + [0.0]*max(0, n-5),
-             "relative_humidity_2m_mean": [65.0]*n, "wind_speed_10m_mean": [2.5]*n,
-             "shortwave_radiation_sum": [18.5]*n, "et0_fao_evapotranspiration": [3.1]*n,
-             "sunshine_duration": [36000.0]*n}
-    if drop: daily.pop(drop)
-    return {"latitude": 48.75, "longitude": 30.25, "elevation": 215.0, "utc_offset_seconds": 10800,
-            "timezone": "Europe/Kyiv", "daily_units": {}, "daily": daily}
-po = W.parse_om(om_payload(D(2024,5,1), 6))
-check(len(po) == 6 and math.isnan(po.get("prec")[1]) and po.get("prec")[2] == 2.5, "null → NaN")
-check(close(po.get("sun")[0], 10.0), "сяйво: 36000 с → 10 год")
-check(po.meta["timezone"] == "Europe/Kyiv" and po.meta["grid_lat"] == 48.75, "метадані (пояс, комірка сітки)")
-try: W.parse_om({"error": True, "reason": "Cannot initialize WeatherVariable"}); check(False, "error → виняток")
-except W.WeatherError as e: check("Cannot initialize" in str(e), "поле error → WeatherError із причиною")
-
 # ─────────────────────────────────────────────────────────
-print("\n== 11. Завантаження: чанки по роках, кеш, повтори, самовідновлення")
+print("\n== 11. Завантаження: чанки по роках, повтори; кешу немає")
 calls = []
 def getter_nasa(url):
     calls.append(url)
@@ -207,20 +188,12 @@ check(len(ser) == (d1 - d0).days + 1 and ser.dates[0] == d0 and ser.dates[-1] ==
 check(len(slept) == 2 and all(s == 1.0 for s in slept), "ввічлива пауза 1 с між запитами")
 n_before = len(calls)
 W.fetch_nasa(48.75, 30.22, d0, d1, getter=getter_nasa, sleep=slept.append, today=D(2024,1,1))
-check(len(calls) == n_before, "повторний запит узято з кешу (мережі не було)")
-W.fetch_nasa(48.75, 30.22, d0, d1, getter=getter_nasa, sleep=slept.append, today=D(2024,1,1), use_cache=False)
-check(len(calls) == n_before + 3, "use_cache=False ігнорує кеш")
+check(len(calls) == n_before + 3, "повторний запит знову йде в мережу: кешу немає, дані завантажуються щоразу заново")
 check(ser.meta["retrieved_at"][:4] == str(dt.date.today().year), "дата отримання збережена в метаданих")
 
-# свіжі дані: кеш діє 1 добу
-key = f"nasa|48.7500|30.2200|2024-09-01|2024-09-10|{','.join(sorted(W.NASA_PARAMS))}"
-W.cache_put(key, nasa_payload(D(2024,9,1), 10))
-p = W._cache_path(key); obj = json.load(open(p)); 
-check(W.cache_get(key, D(2024,9,10), today=D(2024,9,20)) is not None, "свіжий період: кеш діє в межах доби")
-obj["retrieved_at"] = (dt.datetime.now() - dt.timedelta(days=2)).replace(microsecond=0).isoformat()
-json.dump(obj, open(p, "w"))
-check(W.cache_get(key, D(2024,9,10), today=D(2024,9,20)) is None, "свіжий період: кеш старший за добу → оновлення")
-check(W.cache_get(key, D(2020,1,1), today=D(2024,9,20)) is not None, "давній період: кеш безстроковий")
+check(not hasattr(W, "cache_get") and not hasattr(W, "cache_put") and not hasattr(W, "cache_dir"), "кеш видалено з ядра")
+import inspect
+check("use_cache" not in inspect.signature(W.fetch_nasa).parameters, "параметра use_cache більше немає")
 
 # повтори при 429
 state = {"n": 0}
@@ -230,40 +203,34 @@ def flaky(url):
     return 200, json.dumps(nasa_payload(D(2020,1,1), 5))
 slept2, msgs = [], []
 sr = W.fetch_nasa(48.75, 30.22, D(2020,1,1), D(2020,1,5), getter=flaky, sleep=slept2.append,
-                  progress=msgs.append, use_cache=False)
+                  progress=msgs.append)
 check(state["n"] == 3 and slept2 == [5, 15], f"429 двічі → очікування {slept2} і успіх із 3-ї спроби")
 check(any("повтор" in m for m in msgs), "користувачу показано повідомлення про очікування")
 def always429(url): return 429, "x"
-try: W.fetch_nasa(48.75, 30.22, D(2020,1,1), D(2020,1,5), getter=always429, sleep=lambda s: None, use_cache=False); check(False, "мало впасти")
-except W.WeatherError as e: check("429" in str(e), "після 4 спроб — зрозуміла помилка з кодом")
+try: W.fetch_nasa(48.75, 30.22, D(2020,1,1), D(2020,1,5), getter=always429, sleep=lambda s: None); check(False, "мало впасти")
+except W.WeatherError as e: check("429" in str(e), "після 4 спроб – зрозуміла помилка з кодом")
 def bad400(url): return 400, '{"messages":["start date before 19810101"]}'
-try: W.fetch_nasa(48.75, 30.22, D(2020,1,1), D(2020,1,5), getter=bad400, sleep=lambda s: None, use_cache=False); check(False, "мало впасти")
+try: W.fetch_nasa(48.75, 30.22, D(2020,1,1), D(2020,1,5), getter=bad400, sleep=lambda s: None); check(False, "мало впасти")
 except W.WeatherError as e: check("400" in str(e), "400 не повторюється, причина показана")
 def offline(url): raise W.WeatherError("Немає з'єднання з сервером (x)")
-try: W.fetch_nasa(48.75, 30.22, D(2020,1,1), D(2020,1,5), getter=offline, use_cache=False); check(False, "мало впасти")
+try: W.fetch_nasa(48.75, 30.22, D(2020,1,1), D(2020,1,5), getter=offline); check(False, "мало впасти")
 except W.WeatherError as e: check("з'єднання" in str(e), "офлайн → зрозуміле повідомлення")
 
-# Open-Meteo: самовідновлення при невідомій змінній
-seen = []
-def om_getter(url):
-    seen.append(url)
-    if "relative_humidity_2m_mean" in url:
-        return 400, json.dumps({"error": True, "reason": "Cannot initialize WeatherVariable from invalid String value "
-                                                           "relative_humidity_2m_mean for key daily"})
-    return 200, json.dumps(om_payload(D(2020,6,1), 5, drop=None))
-sh = W.fetch_openmeteo(48.75, 30.22, D(2020,6,1), D(2020,6,5), getter=om_getter, use_cache=False, sleep=lambda s: None)
-check(len(seen) == 2 and "relative_humidity_2m_mean" not in seen[1], "невідому змінну прибрано й запит повторено")
-check("timezone=auto" in seen[0] and "wind_speed_unit=ms" in seen[0] and "models=era5" in seen[0],
-      "запит містить timezone=auto, м/с, модель ERA5")
-check(len(sh) == 5, "ряд отримано попри відсутню змінну")
-
-# геокодер
+# геокодер OpenStreetMap (Nominatim)
+seen_geo = []
 def geo(url):
-    return 200, json.dumps({"results": [{"name": "Умань", "latitude": 48.75, "longitude": 30.22,
-                                          "elevation": 211, "country": "Україна", "admin1": "Черкаська область"}]})
+    seen_geo.append(url)
+    return 200, json.dumps([{"lat": "48.7484", "lon": "30.2218", "display_name": "Умань, Уманська міська громада, Черкаська область, Україна", "type": "city"},
+                            {"lat": "bad", "lon": "1", "display_name": "зіпсований запис"},
+                            {"lat": "48.9", "lon": "30.1", "name": "Умань (село)"}])
 g = W.geocode("Умань", getter=geo)
-check(g and g[0]["lat"] == 48.75 and "Черкаська" in g[0]["label"], "геокодер розібрано")
-check(W.geocode("zzzz", getter=lambda u: (200, "{}")) == [], "порожня відповідь → порожній список")
+check(len(g) == 2 and g[0]["lat"] == 48.7484 and "Черкаська" in g[0]["label"] and g[0]["kind"] == "city", "геокодер Nominatim розібрано; запис із некоректними координатами пропущено")
+check("nominatim.openstreetmap.org/search" in seen_geo[0] and "format=jsonv2" in seen_geo[0] and "accept-language=uk" in seen_geo[0] and "limit=8" in seen_geo[0], "запит: сервер Nominatim, jsonv2, мова uk, ліміт")
+check(W.geocode("zzzz", getter=lambda u: (200, "[]")) == [], "порожня відповідь → порожній список")
+for bad, frag in ((lambda u: (503, "x"), "HTTP 503"), (lambda u: (200, "{}"), "неочікувану"), (lambda u: (200, "не json"), "некоректну")):
+    try: W.geocode("x", getter=bad); check(False, "мало впасти")
+    except W.WeatherError as e: check(frag in str(e), f"помилка геокодера: «{frag}»")
+check("OpenStreetMap" in W.OSM_ATTRIBUTION and "ODbL" in W.OSM_ATTRIBUTION, "атрибуція OpenStreetMap збережена в ядрі")
 
 # ─────────────────────────────────────────────────────────
 print("\n== 12. Власний файл (CSV)")
@@ -297,7 +264,7 @@ check(close(norm["prec_sum"], 2.0*214*1.0, 1e-6), f"норма опадів = {n
 an = W.anomaly_row(W.period_stats(yrs[2019]), norm)
 check(close(an["d_tmean"], 1.0) and close(an["prec_pct"], 80.0), f"2019: Δt=+1,0; опади {an['prec_pct']:.0f}% норми")
 check(W.precip_deviation_class(80.0) == "в межах норми" and W.precip_deviation_class(79.9) == "суттєво нижче норми"
-      and W.precip_deviation_class(120.1) == "суттєво вище норми", "відхилення >20 % — суттєві (джерело ЖДТУ)")
+      and W.precip_deviation_class(120.1) == "суттєво вище норми", "відхилення >20 % – суттєві (джерело ЖДТУ)")
 a, b = W.window_for_year(2023, 2, 29, 3, 1)
 check(a == D(2023,2,28), "29.02 у невисокосний рік → 28.02")
 a, b = W.window_for_year(2024, 11, 1, 3, 31)
@@ -309,19 +276,23 @@ today = D(2024, 10, 9)
 sr = const_series([(D(2024,10,1), D(2024,10,8), 10.0, 8.0)])
 notes = W.quality_notes(sr, "nasa", D(2024,10,1), D(2024,10,9), today=today)
 check(any("попередні" in n for n in notes) and any("реаналізу" in n for n in notes), "NASA, свіжі дані → 2 попередження")
-check(any("1 діб із запитаних" in n or "діб із запитаних" in n for n in notes), "нестача діб повідомлена")
-notes2 = W.quality_notes(const_series([(D(2015,5,1), D(2015,5,31), 10.0, 8.0)]), "openmeteo",
-                         D(2015,5,1), D(2015,5,31), today=today)
+check(any("діб із запитаних" in n for n in notes), "нестача діб повідомлена")
+notes2 = W.quality_notes(const_series([(D(2015,5,1), D(2015,5,31), 10.0, 8.0)]), "nasa", D(2015,5,1), D(2015,5,31), today=today)
 check(not any("попередні" in n for n in notes2) and any("метеостанції" in n for n in notes2),
       "давні дані: без попередження про «швидкий перегляд», з порадою щодо станції")
-par = W.methods_paragraph(sh, D(2020,6,1), D(2020,6,5), 48.75, 30.22, "openmeteo", 10.0, "decade")
-check("ERA5" in par and "ГТК = ΣR / (0,1·Σt)" in par and "48,7500° пн. ш." in par and "30,2200° сх. д." in par,
+sh = W.fetch_nasa(48.75, 30.22, D(2020,6,1), D(2020,6,5), getter=getter_nasa, sleep=lambda s: None)
+par = W.methods_paragraph(sh, D(2020,6,1), D(2020,6,5), 48.75, 30.22, "nasa", 10.0, "decade")
+check("NASA POWER" in par and "MERRA-2" in par and "ГТК = ΣR / (0,1·Σt)" in par and "48,7500° пн. ш." in par and "30,2200° сх. д." in par,
       "абзац методики містить джерело, формулу ГТК і координати")
-check("Польовий" in par, "посилання на джерело шкали ГТК у тексті")
+check("Селянінова" in par and "Умови зволоження оцінювали за значенням ГТК" in par and W.HTC_SCALE_TEXT in par, "є визначення ГТК за Селяніновим і шкала умов зволоження")
+for bad in ("Польов", "Божко", "Вольвач", "Основи агрометеорології", "ТЕС, 2004", "подано за"):
+    check(bad not in par and bad not in W.HTC_SCALE_TEXT, f"у тексті методики немає згадки «{bad}»")
+check(not hasattr(W, "HTC_SOURCE"), "посилання на джерело градації ГТК видалено з ядра")
 check("NASA Langley" in " ".join(W.citation_block("nasa")), "подяка NASA в експорті")
-check(any("10.5281/ZENODO.7970649" in c for c in W.citation_block("openmeteo")), "цитування Open-Meteo/ERA5")
-check("некомерційного" in W.licence_notice("openmeteo"), "попередження про ліцензію Open-Meteo")
-check(close(W.estimate_om_calls(14, 9), 1.0) and close(W.estimate_om_calls(10957, 9), 10957/14), "оцінка ваги запиту Open-Meteo")
+check(W.citation_block("openmeteo") == [] and W.licence_notice("openmeteo") == "", "Open-Meteo: джерело більше не підтримується (немає цитувань і ліцензійних приміток)")
+check("NASA" in W.licence_notice("nasa"), "примітка про умови NASA POWER")
+check(set(W.SOURCE_TITLES) == {"nasa", "file"} and set(W.SOURCE_MIN_DATE) == {"nasa"} and set(W.SOURCE_LAG_DAYS) == {"nasa"}, "джерела: лише NASA POWER і власні дані")
+check(not any(hasattr(W, n) for n in ("fetch_openmeteo", "parse_om", "estimate_om_calls", "OM_URL", "OM_CITES", "PRESET_PLACES")), "Open-Meteo і швидкий вибір міст видалено з ядра")
 
 
 # ─────────────────────────────────────────────────────────
@@ -339,7 +310,7 @@ check([y for y,_,_,_ in okw] == [2022,2023,2024] and not skw, "3 повних в
 part = big.slice(D(2022,6,1), D(2024,8,31))
 okp, skp = W.year_windows(part, (4,1,10,31))
 check([y for y,_,_,_ in okp] == [2023] and sorted(y for y,_,_ in skp) == [2022, 2024],
-      "часткові вікна 2022 і 2024 виключено й повідомлено, 2023 — повне")
+      "часткові вікна 2022 і 2024 виключено й повідомлено, 2023 – повне")
 okx, skx = W.year_windows(big, (11,1,3,31))
 check([y for y,_,_,_ in okx] == [2022, 2023], "вікно листопад–березень через Новий рік: 2022/23, 2023/24")
 check(okx[0][1] == D(2022,11,1) and okx[0][2] == D(2023,3,31), "межі вікна 2022/23 коректні")
@@ -354,7 +325,7 @@ check([(a, b) for _, a, b in bt] == [(D(2024,5,1), D(2024,5,15)), (D(2024,5,16),
 cu = W.intervals_from_dates(dts, season_start=D(2024,5,1), mode="cumulative")
 check([a for _, a, _ in cu] == [D(2024,5,1)]*3 and [b for _, _, b in cu] == dts, "нагромадження від початку сезону")
 nb = W.intervals_from_dates(dts, season_start=None, mode="between")
-check(len(nb) == 2 and nb[0][1] == D(2024,5,16) and nb[1][1] == D(2024,5,30), "без початку сезону перший замір не має інтервалу (перший інтервал — з 16.05)")
+check(len(nb) == 2 and nb[0][1] == D(2024,5,16) and nb[1][1] == D(2024,5,30), "без початку сезону перший замір не має інтервалу (перший інтервал – з 16.05)")
 try: W.intervals_from_dates(dts, None, "cumulative"); check(False, "мало впасти")
 except ValueError: check(True, "нагромадження без початку сезону → помилка")
 big24 = synth(D(2024,1,1), D(2024,12,31))
@@ -376,7 +347,23 @@ rep2 = W.build_report(big, st, norm=(nrm, used, "2022–2024"))
 check(all("anom" in r for r in rep2["years"]), "аномалії додано до кожного року за наявності норми")
 check(abs(sum(r["anom"]["d_tmean"] for r in rep2["years"])) < 1e-9, "сума відхилень від норми, обчисленої з тих самих років = 0")
 
-shutil.rmtree(os.environ["SAD_WEATHER_CACHE"], ignore_errors=True)
+print("\n== 16. Роки порівняння: явний діапазон")
+big = const_series([(D(2021,1,1), D(2024,12,31), 12.0, 1400.0)])
+ok_all, sk_all = W.year_windows(big, (4, 1, 10, 31))
+check([y for y, *_ in ok_all] == [2021, 2022, 2023, 2024], "без обмеження – усі 4 роки з повним покриттям")
+ok_f, sk_f = W.year_windows(big, (4, 1, 10, 31), (2022, 2023))
+check([y for y, *_ in ok_f] == [2022, 2023] and sk_f == [], "years=(2022, 2023) залишає лише ці роки")
+ok_o, _ = W.year_windows(big, (4, 1, 10, 31), (2019, 2020))
+check(ok_o == [], "роки поза рядом → порожньо")
+st = W.default_settings(); check(st["years"] is None, "у налаштуваннях за замовчуванням years = None")
+st["years"] = (2023, 2024); rep16 = W.build_report(big, st)
+check([r["year"] for r in rep16["years"]] == [2023, 2024], "build_report враховує settings['years']")
+partial = const_series([(D(2022,7,1), D(2024,12,31), 12.0, 1000.0)])
+ok_p, sk_p = W.year_windows(partial, (4, 1, 10, 31), (2022, 2024))
+check([y for y, *_ in ok_p] == [2023, 2024] and [y for y, *_ in sk_p] == [2022], "рік, покритий частково (з 1 липня), потрапляє в «неповні», а не в порівняння")
+st["years"] = None; ws = W.weather_set(W.build_report(big, st), "тест"); check(sorted(ws["years"]) == ["2021", "2022", "2023", "2024"], "погодний набір містить усі роки без обмеження")
+st["years"] = (2022, 2022); check(sorted(W.weather_set(W.build_report(big, st), "тест")["years"]) == ["2022"], "погодний набір обмежується роками порівняння")
+
 print("\n" + "=" * 56)
 if FAIL:
     print(f"ПРОВАЛІВ: {len(FAIL)}")

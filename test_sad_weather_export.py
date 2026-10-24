@@ -1,4 +1,4 @@
-# test_sad_weather_export.py — перевірка експорту: файли записуються й ЧИТАЮТЬСЯ НАЗАД
+# test_sad_weather_export.py – перевірка експорту: файли записуються й ЧИТАЮТЬСЯ НАЗАД
 import os, sys, re, math, tempfile, shutil, datetime as dt
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -19,7 +19,7 @@ def synth(d0, d1, seed=1):
     s = W.DailySeries(dts, {"tmean": tm, "tmax": tm+4.5, "tmin": tm-4.5, "prec": pr,
                             "rh": np.full(len(dts), 70.0), "wind": np.full(len(dts), 3.0),
                             "rad": np.full(len(dts), 15.0), "et0": np.maximum(0, (tm+3)*0.2)})
-    s.meta.update({"source": "openmeteo", "model": "era5", "timezone": "Europe/Kyiv",
+    s.meta.update({"source": "nasa", "timezone": "Europe/Kyiv",
                    "grid_lat": 48.75, "grid_lon": 30.25, "grid_elevation_m": 215.0,
                    "retrieved_at": "2026-10-09T12:00:00"})
     return s
@@ -33,19 +33,20 @@ periods = W.intervals_from_dates([dt.date(2024,5,15), dt.date(2024,6,12)], dt.da
     ("поза даними", dt.date(2030,1,1), dt.date(2030,1,5)),
     ("частково", dt.date(2024,12,25), dt.date(2025,1,10))]
 rep = W.build_report(s, st, norm=(nrm, used, "2021–2024"), periods=periods)
-meta = X.make_meta(rep, "Умань, дослідне поле", 48.7484, 30.2218, "openmeteo")
-pub = X.publication_text(rep, "Умань, дослідне поле", 48.7484, 30.2218, "openmeteo")
+meta = X.make_meta(rep, "Умань, дослідне поле", 48.7484, 30.2218, "nasa")
+pub = X.publication_text(rep, "Умань, дослідне поле", 48.7484, 30.2218, "nasa")
 
 print("== 1. Метадані й текст для публікації")
 md = dict(meta)
-check(md["Джерело даних"].startswith("Open-Meteo") and "48.7484" in md["Координати точки"], "джерело й координати")
+check(md["Джерело даних"].startswith("NASA POWER") and "48.7484" in md["Координати точки"], "джерело й координати")
 check("відстань" in md["Центр комірки сітки"] and "км" in md["Центр комірки сітки"], "відстань до центру комірки сітки показано")
 dist = W.haversine_km(48.7484, 30.2218, 48.75, 30.25)
 check(f"{dist:.1f}" in md["Центр комірки сітки"], f"відстань {dist:.1f} км обчислена коректно")
 check(md["Дата отримання даних"] == "09.10.2026 12:00", f"дата отримання даних по-українськи: {md['Дата отримання даних']}")
-for need in ("МЕТОДИКА ЗБОРУ МЕТЕОДАНИХ", "ДЖЕРЕЛА ТА ПОДЯКА", "10.5281/ZENODO.7970649", "УМОВИ ВИКОРИСТАННЯ",
-             "некомерційного", "ШКАЛА ВОЛОГОЗАБЕЗПЕЧЕНОСТІ", "Польовий А.М."):
+for need in ("МЕТОДИКА ЗБОРУ МЕТЕОДАНИХ", "ДЖЕРЕЛА ТА ПОДЯКА", "NASA Langley", "УМОВИ ВИКОРИСТАННЯ", "ШКАЛА ВОЛОГОЗАБЕЗПЕЧЕНОСТІ"):
     check(need in pub, f"текст містить «{need}»")
+for bad in ("Польов", "Божко", "Вольвач", "Основи агрометеорології", "ТЕС, 2004", "подано за", "Джерело шкали", "Open-Meteo", "ERA5", "некомерційного"):
+    check(bad not in pub, f"текст для публікації не містить «{bad}»")
 
 print("\n== 2. Рядкові таблиці (десяткова кома, компактність)")
 sp = X.spec_months(rep)
@@ -56,15 +57,15 @@ check(not any(re.fullmatch(r"-?\d+\.\d+", c) for row in r_full for c in row), "�
 i_apr = next(i for i, r in enumerate(r_full) if r[0].startswith("кві 2022"))
 check(any("," in c for c in r_full[i_apr]), "кома в числах рядка")
 jan = next(i for i, r in enumerate(r_full) if r[0].startswith("січ 2022"))
-check(r_full[jan][h_full.index("ГТК")] == "—" and c_full[jan] == "na", "січень: ГТК «—» (немає активних температур)")
+check(r_full[jan][h_full.index("ГТК")] == "–" and c_full[jan] == "na", "січень: ГТК «–» (немає активних температур)")
 check(any(c in ("d1","d2","d3","d4","ok","wet") for c in c_full), "для активних місяців є клас ГТК")
 check(X.clipboard_text(sp, comma=True).count("\t") >= len(h_full) - 1, "TSV для буфера")
 yr_spec = X.spec_years(rep); yh, yr, yc = X.to_strings(yr_spec, True, False)
 check("Опади, % норми" in yh and "Δt від норми, °C" in yh, "таблиця за роками містить стовпці норми й аномалій")
 ph, pr_, pc = X.to_strings(X.spec_periods(rep), True, False)
-check(pr_[-2][4] == "немає даних" and pr_[0][4] != "немає даних", "період повністю поза даними → «немає даних», решта — числа")
+check(pr_[-2][4] == "немає даних" and pr_[0][4] != "немає даних", "період повністю поза даними → «немає даних», решта – числа")
 check(pr_[-1][3] == "7 з 17" and pr_[-1][4] != "немає даних", f"частково покритий період позначено «{pr_[-1][3]}» (7 діб із 17), а не мовчки")
-check(pr_[0][3] == "15", "повністю покритий період — просто число діб")
+check(pr_[0][3] == "15", "повністю покритий період – просто число діб")
 tot = X.spec_total(rep); th, trs, _ = X.to_strings(tot, True)
 check(any("ГТК Селянінова" in r[0] for r in trs) and any("Водний баланс" in r[0] for r in trs), "зведена таблиця: ГТК і водний баланс (є ET₀)")
 
@@ -89,7 +90,7 @@ check(wb.sheetnames == ["Метадані", "Добові дані", "Підсу
       f"аркуші: {wb.sheetnames}")
 wd = wb["Добові дані"]
 check(wd.max_row == len(s) + 1, "добових рядків стільки, скільки діб")
-check(isinstance(wd["B2"].value, float) and isinstance(wd["A2"].value, dt.datetime), "числа — числа, дати — дати (не текст)")
+check(isinstance(wd["B2"].value, float) and isinstance(wd["A2"].value, dt.datetime), "числа – числа, дати – дати (не текст)")
 check(wd["A2"].number_format == "DD.MM.YYYY", "формат дати ДД.ММ.РРРР")
 wm = wb["Місяці"]
 hdr = [c.value for c in wm[1]]
@@ -115,10 +116,10 @@ p_d = os.path.join(tmp, "weather.docx")
 X.export_docx(p_d, rep, meta, pub, [("Діаграма Вальтера", png1), ("ГТК за місяцями", png2)], comma=True)
 d = docx.Document(p_d)
 texts = [p.text for p in d.paragraphs]
-check(any(t.startswith("Таблиця 1 —") for t in texts) and any(t.startswith("Таблиця 2 —") for t in texts), "підписи таблиць «Таблиця N — …»")
+check(any(t.startswith("Таблиця 1 –") for t in texts) and any(t.startswith("Таблиця 2 –") for t in texts), "підписи таблиць «Таблиця N – …»")
 check(len(d.tables) >= 3, f"таблиць у документі: {len(d.tables)}")
 check(len(d.inline_shapes) == 2, "два рисунки вбудовано")
-check(any(t.startswith("Рис. 1 —") for t in texts) and any(t.startswith("Рис. 2 —") for t in texts), "підписи рисунків")
+check(any(t.startswith("Рис. 1 –") for t in texts) and any(t.startswith("Рис. 2 –") for t in texts), "підписи рисунків")
 tm_ = d.tables[0]
 check(tm_.rows[0].cells[0].text == "Місяць" and any("," in c.text for c in tm_.rows[5].cells), "таблиця місяців: заголовок, десяткова кома")
 hi = [c.text for c in tm_.rows[0].cells].index("ГТК")
@@ -128,10 +129,11 @@ for row in tm_.rows[1:]:
     if tcPr is not None and tcPr.xml.find("w:shd") != -1 and "FFFFFF" not in tcPr.xml and "D9E2F3" not in tcPr.xml: shaded += 1
 check(shaded > 5, f"комірки ГТК у Word пофарбовано ({shaded})")
 check(any("Джерела даних" == t for t in texts) and any("Шкала вологозабезпеченості за ГТК" == t for t in texts)
-      and any("Примітки щодо якості даних" == t for t in texts), "розділи: джерела, примітки, шкала — кожен зі своїм заголовком")
+      and any("Примітки щодо якості даних" == t for t in texts), "розділи: джерела, примітки, шкала – кожен зі своїм заголовком")
 check(not any("УМОВИ ВИКОРИСТАННЯ" in t for t in texts), "службовий блок про ліцензію не потрапив у текст для публікації")
-check(any("ERA5" in t and "Open-Meteo" in t for t in texts), "методика згадує ERA5 і Open-Meteo")
-check(len(d.tables) <= 4 and all("Декада" != t.rows[0].cells[0].text for t in d.tables), "декадна таблиця (108 рядків) не роздуває Word — вона в Excel")
+check(any("NASA POWER" in t and "MERRA-2" in t for t in texts), "методика згадує NASA POWER і MERRA-2")
+check(not any(("Польов" in t or "Божко" in t or "подано за" in t or "Open-Meteo" in t) for t in texts), "у Word немає згадки джерела градації ГТК та Open-Meteo")
+check(len(d.tables) <= 4 and all("Декада" != t.rows[0].cells[0].text for t in d.tables), "декадна таблиця (108 рядків) не роздуває Word – вона в Excel")
 
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n" + "=" * 56)

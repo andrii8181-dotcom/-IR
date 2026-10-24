@@ -1,14 +1,12 @@
-# sad_weather_core.py — S.A.D. v2.1: ядро модуля «Погода» (без tkinter)
+# sad_weather_core.py – S.A.D. v2.1: ядро модуля «Погода» (без tkinter)
 # -*- coding: utf-8 -*-
 """
-Отримання добових метеоданих (NASA POWER, Open-Meteo/ERA5, власний файл),
-кешування, агрокліматичні показники та формування тексту для публікації.
+Отримання добових метеоданих (NASA POWER, власний файл), агрокліматичні показники
+та формування тексту для публікації. Дані завантажуються щоразу заново (кешу немає).
 
-Усі формули й градації задокументовані в коді; ГТК і шкала — за
-Польовий А.М., Божко Л.Ю., Вольвач О.В. «Основи агрометеорології», Одеса, 2004
-(через методичні матеріали ЖДТУ), визначення Г.Т. Селянінова.
+ГТК – за визначенням Г.Т. Селянінова (1928); усі формули задокументовані в коді.
 """
-import os, re, json, math, time, hashlib, calendar
+import os, re, json, math, time, calendar
 import datetime as _dt
 from decimal import Decimal, ROUND_HALF_UP
 import urllib.request, urllib.parse, urllib.error
@@ -34,13 +32,12 @@ VARIABLES = {
 VAR_ORDER = ["tmean", "tmax", "tmin", "prec", "rh", "wind", "rad", "et0", "sun"]
 
 # Мінімальні дати даних (документація джерел)
-SOURCE_MIN_DATE = {"nasa": _dt.date(1981, 1, 1), "openmeteo": _dt.date(1940, 1, 1)}
+SOURCE_MIN_DATE = {"nasa": _dt.date(1981, 1, 1)}
 # Затримка доступності найсвіжіших даних, діб (документація джерел)
-SOURCE_LAG_DAYS = {"nasa": 3, "openmeteo": 5}
+SOURCE_LAG_DAYS = {"nasa": 3}
 
 SOURCE_TITLES = {
     "nasa": "NASA POWER (MERRA-2/CERES, агрокліматична спільнота AG)",
-    "openmeteo": "Open-Meteo Historical Weather API (реаналіз ERA5)",
     "file": "Власні дані (метеостанція, файл)",
 }
 
@@ -49,7 +46,7 @@ SOURCE_TITLES = {
 # ═══════════════════════════════════════════════════════════════
 def parse_coord(text, kind="lat"):
     """Розбирає координату: 48.75 | 48,75 | 48°45'N | 48 45 00 | S 48 45 | -48°45'.
-    Півкулі лише латиницею (N,S,E,W). Повертає float (градуси); ValueError — хибний
+    Півкулі лише латиницею (N,S,E,W). Повертає float (градуси); ValueError – хибний
     формат, діапазон чи невідповідність літери півкулі виду координати."""
     if text is None: raise ValueError("порожня координата")
     s = str(text).strip().upper().replace(",", ".")
@@ -84,24 +81,12 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
     return 2 * R * math.asin(math.sqrt(a))
 
-# Невеликий довідник міст (для швидкого вибору; координати — центри міст)
-PRESET_PLACES = {
-    "Умань": (48.7484, 30.2218), "Київ": (50.4501, 30.5234), "Черкаси": (49.4444, 32.0598),
-    "Вінниця": (49.2328, 28.4681), "Житомир": (50.2547, 28.6587), "Полтава": (49.5883, 34.5514),
-    "Харків": (49.9935, 36.2304), "Дніпро": (48.4647, 35.0462), "Одеса": (46.4825, 30.7233),
-    "Миколаїв": (46.9750, 31.9946), "Херсон": (46.6354, 32.6169), "Запоріжжя": (47.8388, 35.1396),
-    "Львів": (49.8397, 24.0297), "Ужгород": (48.6208, 22.2879), "Івано-Франківськ": (48.9226, 24.7111),
-    "Чернівці": (48.2921, 25.9358), "Тернопіль": (49.5535, 25.5948), "Рівне": (50.6199, 26.2516),
-    "Луцьк": (50.7472, 25.3254), "Хмельницький": (49.4229, 26.9871), "Суми": (50.9077, 34.7981),
-    "Чернігів": (51.4982, 31.2893), "Кропивницький": (48.5079, 32.2623),
-}
-
 # ═══════════════════════════════════════════════════════════════
 # 3. ДОБОВИЙ РЯД
 # ═══════════════════════════════════════════════════════════════
 class DailySeries:
     """Добові дані: dates (list[date]) + dict ключ→np.ndarray(float, NaN = немає даних).
-    meta — словник походження даних (для відтворюваності й тексту методики)."""
+    meta – словник походження даних (для відтворюваності й тексту методики)."""
     def __init__(self, dates, data, meta=None):
         self.dates = list(dates)
         n = len(self.dates)
@@ -111,7 +96,7 @@ class DailySeries:
             if len(arr) != n: raise ValueError(f"довжина «{k}» ≠ кількості дат")
             self.data[k] = arr
         self.meta = dict(meta or {})
-        # tmean: якщо немає, але є tmax і tmin — наближення (tmax+tmin)/2 (з позначкою)
+        # tmean: якщо немає, але є tmax і tmin – наближення (tmax+tmin)/2 (з позначкою)
         if "tmean" not in self.data and "tmax" in self.data and "tmin" in self.data:
             self.data["tmean"] = (self.data["tmax"] + self.data["tmin"]) / 2.0
             self.meta["tmean_derived"] = True
@@ -171,43 +156,9 @@ def http_get(url, timeout=60):
         except Exception: body = ""
         return e.code, body
     except urllib.error.URLError as e:
-        raise WeatherError(f"Немає з'єднання з сервером ({e.reason}). Перевірте інтернет — "
-                           f"раніше завантажені дані доступні з кешу.")
+        raise WeatherError(f"Немає з'єднання з сервером ({e.reason}). Перевірте інтернет-з'єднання.")
     except Exception as e:
         raise WeatherError(f"Помилка мережі: {e}")
-
-def cache_dir():
-    d = os.environ.get("SAD_WEATHER_CACHE") or os.path.join(os.path.expanduser("~"), ".sad_weather_cache")
-    os.makedirs(d, exist_ok=True)
-    return d
-
-def _cache_path(key):
-    return os.path.join(cache_dir(), hashlib.sha1(key.encode("utf-8")).hexdigest() + ".json")
-
-def cache_get(key, end_date=None, today=None):
-    """Повертає (payload, retrieved_at) або None. Для свіжих періодів (< 100 діб від
-    сьогодні) кеш діє 1 добу — джерела можуть уточнювати останні дані."""
-    p = _cache_path(key)
-    if not os.path.exists(p): return None
-    try:
-        with open(p, "r", encoding="utf-8") as f: obj = json.load(f)
-    except Exception:
-        return None
-    today = today or _dt.date.today()
-    if end_date is not None and (today - end_date).days < 100:
-        try:
-            got = _dt.datetime.fromisoformat(obj["retrieved_at"])
-            if (_dt.datetime.now() - got).total_seconds() > 86400: return None
-        except Exception: return None
-    return obj["payload"], obj["retrieved_at"]
-
-def cache_put(key, payload):
-    stamp = _dt.datetime.now().replace(microsecond=0).isoformat()
-    try:
-        with open(_cache_path(key), "w", encoding="utf-8") as f:
-            json.dump({"key": key, "retrieved_at": stamp, "payload": payload}, f, ensure_ascii=False)
-    except Exception: pass
-    return stamp
 
 # ═══════════════════════════════════════════════════════════════
 # 5. NASA POWER
@@ -285,22 +236,16 @@ def _get_json_with_retry(url, getter, progress=None, max_tries=4, sleep=time.sle
         break
     raise WeatherError(f"Не вдалося отримати дані. {last}")
 
-def fetch_nasa(lat, lon, d0, d1, getter=None, progress=None, use_cache=True,
-               sleep=time.sleep, today=None):
+def fetch_nasa(lat, lon, d0, d1, getter=None, progress=None, sleep=time.sleep, today=None):
+    """Завантажує добові дані NASA POWER щоразу заново (без кешу), по одному запиту на календарний рік."""
     getter = getter or http_get
     parts, stamps = [], []
     chunks = _year_chunks(d0, d1)
     for i, (a, b) in enumerate(chunks):
-        key = f"nasa|{lat:.4f}|{lon:.4f}|{iso(a)}|{iso(b)}|{','.join(sorted(NASA_PARAMS))}"
-        cached = cache_get(key, b, today) if use_cache else None
-        if cached:
-            payload, stamp = cached
-        else:
-            if progress: progress(f"NASA POWER: {a.year} ({i+1}/{len(chunks)})…")
-            payload = _get_json_with_retry(nasa_url(lat, lon, a, b), getter, progress, sleep=sleep)
-            stamp = cache_put(key, payload)
-            if i < len(chunks) - 1: sleep(1.0)      # ввічлива пауза між запитами
-        stamps.append(stamp)
+        if progress: progress(f"NASA POWER: {a.year} ({i+1}/{len(chunks)})…")
+        payload = _get_json_with_retry(nasa_url(lat, lon, a, b), getter, progress, sleep=sleep)
+        stamps.append(_dt.datetime.now().replace(microsecond=0).isoformat())
+        if i < len(chunks) - 1: sleep(1.0)          # ввічлива пауза між запитами
         parts.append(parse_nasa(payload))
     ser = DailySeries.merge(parts)
     ser.meta.update({"lat": lat, "lon": lon, "retrieved_at": max(stamps) if stamps else "",
@@ -308,94 +253,27 @@ def fetch_nasa(lat, lon, d0, d1, getter=None, progress=None, use_cache=True,
     return ser
 
 # ═══════════════════════════════════════════════════════════════
-# 6. OPEN-METEO (ERA5)
+# 6. ПОШУК МІСЦЯ ЗА НАЗВОЮ (OpenStreetMap Nominatim)
 # ═══════════════════════════════════════════════════════════════
-OM_URL = "https://archive-api.open-meteo.com/v1/archive"
-OM_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
-# daily-змінні: назва API → (внутрішній ключ, множник до внутрішньої одиниці)
-OM_DAILY = [("temperature_2m_mean", "tmean", 1.0), ("temperature_2m_max", "tmax", 1.0),
-            ("temperature_2m_min", "tmin", 1.0), ("precipitation_sum", "prec", 1.0),
-            ("relative_humidity_2m_mean", "rh", 1.0), ("wind_speed_10m_mean", "wind", 1.0),
-            ("shortwave_radiation_sum", "rad", 1.0),
-            ("et0_fao_evapotranspiration", "et0", 1.0),
-            ("sunshine_duration", "sun", 1.0 / 3600.0)]       # с → год
-OM_MODELS = {"era5": "ERA5 (0,25°, усі змінні)", "era5_seamless": "ERA5-Seamless",
-             "era5_land": "ERA5-Land (0,1°; без опадів і радіації)"}
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+OSM_ATTRIBUTION = "Дані пошуку: © учасники OpenStreetMap (ліцензія ODbL)."
 
-def om_url(lat, lon, d0, d1, variables=None, model="era5"):
-    names = variables or [v[0] for v in OM_DAILY]
-    q = {"latitude": f"{lat:.4f}", "longitude": f"{lon:.4f}",
-         "start_date": iso(d0), "end_date": iso(d1),
-         "daily": ",".join(names), "timezone": "auto",
-         "wind_speed_unit": "ms", "precipitation_unit": "mm", "models": model}
-    return OM_URL + "?" + urllib.parse.urlencode(q, safe=",")
-
-_OM_BAD_VAR = re.compile(r"invalid String value\s+([A-Za-z0-9_]+)")
-
-def parse_om(payload, wanted=None):
-    if isinstance(payload, dict) and payload.get("error"):
-        raise WeatherError(f"Open-Meteo: {payload.get('reason', 'невідома помилка')}")
-    daily = (payload or {}).get("daily")
-    if not daily or "time" not in daily:
-        raise WeatherError("Open-Meteo повернув відповідь без добових даних.")
-    dates = [_dt.date.fromisoformat(t[:10]) for t in daily["time"]]
-    data = {}
-    for api_name, key, mult in OM_DAILY:
-        if api_name in daily:
-            arr = np.array([NAN if v is None else float(v) * mult for v in daily[api_name]], dtype=float)
-            data[key] = arr
-    meta = {"source": "openmeteo", "timezone": payload.get("timezone", ""),
-            "grid_lat": payload.get("latitude"), "grid_lon": payload.get("longitude"),
-            "grid_elevation_m": payload.get("elevation")}
-    return DailySeries(dates, data, meta)
-
-def fetch_openmeteo(lat, lon, d0, d1, model="era5", getter=None, progress=None,
-                    use_cache=True, sleep=time.sleep, today=None):
+def geocode(name, getter=None, count=8):
+    """Онлайн-пошук населеного пункту в OpenStreetMap (Nominatim). Умови публічного сервера: не частіше 1 запиту/с,
+    ідентифікація програми в User-Agent, без автодоповнення; атрибуція © OpenStreetMap. Один запит на натискання кнопки."""
     getter = getter or http_get
-    parts, stamps = [], []
-    names = [v[0] for v in OM_DAILY]
-    chunks = _year_chunks(d0, d1)
-    for i, (a, b) in enumerate(chunks):
-        key = f"om|{model}|{lat:.4f}|{lon:.4f}|{iso(a)}|{iso(b)}"
-        cached = cache_get(key, b, today) if use_cache else None
-        if cached:
-            payload, stamp = cached
-        else:
-            if progress: progress(f"Open-Meteo: {a.year} ({i+1}/{len(chunks)})…")
-            vars_now = list(names)
-            payload = None
-            for _ in range(len(names)):               # самовідновлення при невідомій змінній
-                try:
-                    payload = _get_json_with_retry(om_url(lat, lon, a, b, vars_now, model), getter,
-                                                   progress, sleep=sleep)
-                    break
-                except WeatherError as e:
-                    m = _OM_BAD_VAR.search(str(e))
-                    if m and m.group(1) in vars_now and len(vars_now) > 1:
-                        vars_now.remove(m.group(1))   # прибираємо змінну, яку сервер не знає
-                        continue
-                    raise
-            stamp = cache_put(key, payload)
-        stamps.append(stamp)
-        parts.append(parse_om(payload))
-    ser = DailySeries.merge(parts)
-    ser.meta.update({"lat": lat, "lon": lon, "retrieved_at": max(stamps) if stamps else "",
-                     "source": "openmeteo", "model": model, "start": iso(d0), "end": iso(d1)})
-    return ser
-
-def geocode(name, getter=None, count=6):
-    """Пошук місця за назвою (Open-Meteo Geocoding API). Повертає список dict."""
-    getter = getter or http_get
-    q = {"name": name, "count": count, "language": "uk", "format": "json"}
-    status, text = getter(OM_GEOCODE_URL + "?" + urllib.parse.urlencode(q))
-    if status != 200: raise WeatherError(f"Геокодер недоступний (HTTP {status}).")
-    try: res = json.loads(text).get("results") or []
-    except ValueError: raise WeatherError("Геокодер повернув некоректну відповідь.")
+    q = {"q": name, "format": "jsonv2", "limit": count, "accept-language": "uk", "addressdetails": 0}
+    status, text = getter(NOMINATIM_URL + "?" + urllib.parse.urlencode(q))
+    if status != 200: raise WeatherError(f"Сервіс пошуку недоступний (HTTP {status}).")
+    try: res = json.loads(text)
+    except ValueError: raise WeatherError("Сервіс пошуку повернув некоректну відповідь.")
+    if not isinstance(res, list): raise WeatherError("Сервіс пошуку повернув неочікувану відповідь.")
     out = []
     for r in res:
-        label = ", ".join(x for x in (r.get("name"), r.get("admin1"), r.get("country")) if x)
-        out.append({"label": label, "lat": r["latitude"], "lon": r["longitude"],
-                    "elevation": r.get("elevation")})
+        try: lat, lon = float(r["lat"]), float(r["lon"])
+        except (KeyError, TypeError, ValueError): continue
+        out.append({"label": str(r.get("display_name") or r.get("name") or f"{lat:.4f}, {lon:.4f}"), "lat": lat, "lon": lon,
+                    "kind": str(r.get("type") or "")})
     return out
 
 # ═══════════════════════════════════════════════════════════════
@@ -431,7 +309,7 @@ def guess_columns(headers):
 def _num(s):
     if s is None: return NAN
     s = str(s).strip().replace("\u00a0", "").replace(" ", "").replace(",", ".")
-    if s in ("", "-", "—", "NA", "N/A", "nan", "NaN", "None", "9999", "-999", "-9999"): return NAN
+    if s in ("", "-", "–", "NA", "N/A", "nan", "NaN", "None", "9999", "-999", "-9999"): return NAN
     try: return float(s)
     except ValueError: return NAN
 
@@ -496,14 +374,14 @@ def _nan_mean(a):
 # ═══════════════════════════════════════════════════════════════
 def active_temp_sum(tmean, base=10.0):
     """Сума активних температур (САТ): Σ tсер за доби, коли tсер > base (стандарт
-    агрометеорології: tсер ≥ base для ГТК — див. нижче; тут строго «вище порога»)."""
+    агрометеорології: tсер ≥ base для ГТК – див. нижче; тут строго «вище порога»)."""
     t = np.asarray(tmean, float)
     m = t > base
     return float(np.sum(t[m])) if np.any(m) else 0.0
 
 def effective_temp_sum(tmean, base=10.0, upper=None):
     """Сума ефективних температур (СЕТ): Σ (tсер − base) за доби, коли tсер > base.
-    upper — необов'язкове верхнє обмеження tсер (напр. 30 °C для кукурудзи)."""
+    upper – необов'язкове верхнє обмеження tсер (напр. 30 °C для кукурудзи)."""
     t = np.asarray(tmean, float)
     if upper is not None: t = np.minimum(t, upper)
     ex = t - base
@@ -523,19 +401,17 @@ def htc_class(value, scale=None):
     if r <= 1.5: return "достатньо волого", "ok"
     return "надмірно волого", "wet"
 
-HTC_SCALE_TEXT = ("ГТК < 0,4 — дуже сильна посуха; 0,4–0,5 — сильна посуха; 0,6–0,7 — середня посуха; "
-                  "0,8–0,9 — слабка посуха; 1,0–1,5 — достатньо волого; > 1,5 — надмірно волого "
+HTC_SCALE_TEXT = ("ГТК < 0,4 – дуже сильна посуха; 0,4–0,5 – сильна посуха; 0,6–0,7 – середня посуха; "
+                  "0,8–0,9 – слабка посуха; 1,0–1,5 – достатньо волого; > 1,5 – надмірно волого "
                   "(клас визначено за значенням ГТК, округленим до 0,1).")
-HTC_SOURCE = ("Польовий А.М., Божко Л.Ю., Вольвач О.В. Основи агрометеорології: конспект лекцій. "
-              "Одеса: ТЕС, 2004. 150 с.; Селянінов Г.Т. (1928).")
 
 def htc(prec, tmean, method="calendar", threshold=10.0):
     """ГТК Селянінова = ΣR / (0,1 · Σt) за період із tсер > threshold.
     method:
-      'calendar' — як у навчальних прикладах джерела: якщо середня t періоду > 10 °C, то
+      'calendar' – як у навчальних прикладах джерела: якщо середня t періоду > 10 °C, то
                    Σt і ΣR беруться за ВСІ доби періоду; інакше ГТК не розраховується
                    (декада/місяць без активних температур).
-      'daily'    — суворо за добами: лише доби з tсер > 10 °C (і опади лише цих діб).
+      'daily'    – суворо за добами: лише доби з tсер > 10 °C (і опади лише цих діб).
     Повертає dict: htc, sum_t, sum_r, days (кількість діб), ok (bool)."""
     p = np.asarray(prec, float); t = np.asarray(tmean, float)
     valid = ~np.isnan(t) & ~np.isnan(p)
@@ -555,11 +431,11 @@ def htc(prec, tmean, method="calendar", threshold=10.0):
 def htc_period(series, method="decade", threshold=10.0):
     """ГТК за довільний період (вегетаційний тощо).
     method:
-      'decade' / 'month' — за методикою джерела: Σt складається з сум активних температур
+      'decade' / 'month' – за методикою джерела: Σt складається з сум активних температур
           тих декад (місяців), СЕРЕДНЯ температура яких > 10 °C (сума за такий відрізок =
-          середня × кількість діб); ΣR — опади за ВЕСЬ період (так у розрахункових прикладах
+          середня × кількість діб); ΣR – опади за ВЕСЬ період (так у розрахункових прикладах
           джерела: 135,3 мм / (0,1·1373) ≈ 1,0 для квітня–червня).
-      'daily' — суворо за добами: лише доби з tсер > 10 °C (і опади лише цих діб).
+      'daily' – суворо за добами: лише доби з tсер > 10 °C (і опади лише цих діб).
     Повертає dict: htc, sum_t, sum_r, days, ok."""
     p = series.get("prec"); t = series.get("tmean")
     if method == "daily":
@@ -590,7 +466,7 @@ def longest_run(mask):
 def period_stats(series, base_temps=(5.0, 10.0, 15.0), gdd_base=10.0, gdd_upper=None,
                  htc_method="decade", row_rule=None):
     """Зведені показники за весь ряд series (довільний період). Повертає dict.
-    htc_method: 'decade' | 'month' | 'daily' (див. htc_period). row_rule — для рядків
+    htc_method: 'decade' | 'month' | 'daily' (див. htc_period). row_rule – для рядків
     таблиць за декадами/місяцями: 'calendar' (правило одного відрізка) чи 'daily'."""
     r = {}
     n = len(series)
@@ -637,7 +513,7 @@ def balance_water(series):
 
 def table_by_groups(series, keyfunc, labelfunc, **kw):
     """Таблиця показників за групами (місяці/декади). Повертає list[dict].
-    ГТК рядка: правило одного відрізка (календарне) або добове — залежно від htc_method."""
+    ГТК рядка: правило одного відрізка (календарне) або добове – залежно від htc_method."""
     kw = dict(kw)
     kw["row_rule"] = "daily" if kw.get("htc_method") == "daily" else "calendar"
     out = []
@@ -678,7 +554,7 @@ def threshold_dates(series, threshold, run=5):
             "start_before_window": first == 0, "end_after_window": j == n - 1}
 
 def cumulative(series, key, base=None):
-    """Наростаючі суми: для опадів/радіації — Σ; для температур із base — СЕТ чи САТ
+    """Наростаючі суми: для опадів/радіації – Σ; для температур із base – СЕТ чи САТ
     (base задає поріг; повертає два масиви: (active, effective))."""
     v = series.get(key)
     v0 = np.where(np.isnan(v), 0.0, v)
@@ -723,7 +599,7 @@ def anomaly_row(stats, norm):
     return {"d_tmean": d("tmean"), "prec_pct": pct, "d_sat_10": d("sat_10"), "d_htc": d("htc")}
 
 def precip_deviation_class(pct):
-    """Оцінка за відхиленням опадів від норми (джерело ЖДТУ: відхилення понад 20 % —
+    """Оцінка за відхиленням опадів від норми (джерело ЖДТУ: відхилення понад 20 % –
     суттєві)."""
     if pct is None or math.isnan(pct): return "н/д"
     if pct < 80: return "суттєво нижче норми"
@@ -743,7 +619,7 @@ def quality_notes(series, source, d0, d1, today=None):
     for k in ("tmean", "prec"):
         ms = series.missing_share(k)
         if series.has(k) and ms > 0:
-            notes.append(f"«{VARIABLES[k][0]}»: пропущено {ms*100:.1f}% значень — "
+            notes.append(f"«{VARIABLES[k][0]}»: пропущено {ms*100:.1f}% значень – "
                          f"показники за такі періоди розраховані за наявними добами.")
         if not series.has(k) and source != "file":
             notes.append(f"«{VARIABLES[k][0]}»: даних немає.")
@@ -752,10 +628,10 @@ def quality_notes(series, source, d0, d1, today=None):
         notes.append(f"Кінець періоду близько до сьогодні: останні доби можуть бути відсутні "
                      f"(затримка джерела ≈ {lag} діб) або попередніми.")
     if source == "nasa" and (today - d1).days < 100:
-        notes.append("NASA POWER: метеорологічні дані останніх 2–3 місяців — попередні "
+        notes.append("NASA POWER: метеорологічні дані останніх 2–3 місяців – попередні "
                      "(швидкий перегляд) і будуть замінені кліматично-якісними; повторний "
                      "запит пізніше може дати дещо інші значення. Зафіксуйте дату отримання.")
-    if source in ("nasa", "openmeteo"):
+    if source == "nasa":
         notes.append("Це дані реаналізу/супутникової оцінки для комірки сітки, а не вимірювання "
                      "метеостанції на ділянці: опади згладжені, екстремуми занижені. Для "
                      "дисертації бажано порівняти з найближчою станцією, якщо вона є.")
@@ -768,14 +644,6 @@ def quality_notes(series, source, d0, d1, today=None):
 # ═══════════════════════════════════════════════════════════════
 NASA_ACK = ("These data were obtained from the NASA Langley Research Center POWER Project "
             "funded through the NASA Earth Science Directorate Applied Science Program.")
-OM_CITES = [
-    "Zippenfenig P. (2023). Open-Meteo.com Weather API [Computer software]. Zenodo. "
-    "https://doi.org/10.5281/ZENODO.7970649",
-    "Hersbach H., Bell B., Berrisford P. et al. (2023). ERA5 hourly data on single levels from "
-    "1940 to present [Data set]. ECMWF. https://doi.org/10.24381/cds.adbb2d47",
-    "Generated using Copernicus Climate Change Service information 2022.",
-]
-
 def methods_paragraph(series, d0, d1, lat, lon, source, gdd_base, htc_method, extras=None):
     """Абзац «Методика збору метеоданих» у науковому стилі (укр.)."""
     ret = series.meta.get("retrieved_at", "")
@@ -793,14 +661,6 @@ def methods_paragraph(series, d0, d1, lat, lon, source, gdd_base, htc_method, ex
                "максимальної й мінімальної температури повітря на висоті 2 м, скоригованої суми "
                "опадів (PRECTOTCORR), відносної вологості повітря, швидкості вітру та сумарної "
                "сонячної радіації.")
-    elif source == "openmeteo":
-        model = series.meta.get("model", "era5")
-        src = (f"Метеорологічні дані отримано через Open-Meteo Historical Weather API з реаналізу "
-               f"ECMWF ERA5 (модель «{model}»; просторове розрізнення 0,25°, часове — 1 година, "
-               f"добові значення агреговано за місцевою добою). Використано середню, максимальну й "
-               f"мінімальну температуру повітря на висоті 2 м, суму опадів, відносну вологість, "
-               f"швидкість вітру, сумарну сонячну радіацію та еталонне випаровування ET₀ "
-               f"(за FAO-56 Penman–Monteith).")
     else:
         src = "Метеорологічні дані наведено за вимірюваннями метеостанції (власні дані дослідника)."
     htc_txt = {"daily": "розраховано за добами з tсер > 10 °C",
@@ -811,11 +671,11 @@ def methods_paragraph(series, d0, d1, lat, lon, source, gdd_base, htc_method, ex
                         "місяці із середньою температурою вище 10 °C, опади враховували за весь період; "
                         "для місяців без активних температур показник не визначали"}.get(htc_method, "")
     calc = (f"Суму активних температур (САТ) обчислювали як суму середньодобових температур за доби з "
-            f"tсер > 5, 10 та 15 °C; суму ефективних температур (СЕТ) — як суму перевищень "
+            f"tсер > 5, 10 та 15 °C; суму ефективних температур (СЕТ) – як суму перевищень "
             f"середньодобової температури над біологічним мінімумом {gdd_base:g} °C. "
             f"Гідротермічний коефіцієнт Селянінова (ГТК) визначали за формулою ГТК = ΣR / (0,1·Σt), де "
-            f"ΣR — сума опадів, мм, Σt — сума активних температур вище 10 °C за той самий період; {htc_txt}. "
-            f"Градацію умов зволоження подано за {HTC_SOURCE.split(';')[0].strip()}: {HTC_SCALE_TEXT}")
+            f"ΣR – сума опадів, мм, Σt – сума активних температур вище 10 °C за той самий період; {htc_txt}. "
+            f"Умови зволоження оцінювали за значенням ГТК: {HTC_SCALE_TEXT}")
     ret_fmt = ""
     if ret:
         try: ret_fmt = _dt.datetime.fromisoformat(ret).strftime("%d.%m.%Y")
@@ -824,10 +684,10 @@ def methods_paragraph(series, d0, d1, lat, lon, source, gdd_base, htc_method, ex
         clauses = [f"Дані стосуються періоду {per}"]
     else:
         clauses = [f"Дані стосуються точки з координатами {coords} за період {per}"]
-    if ret_fmt and source in ("nasa", "openmeteo"):
-        clauses.append(f"дата отримання даних — {ret_fmt}")
+    if ret_fmt and source == "nasa":
+        clauses.append(f"дата отримання даних – {ret_fmt}")
     tail = " " + "; ".join(clauses) + "."
-    if source in ("nasa", "openmeteo"):
+    if source == "nasa":
         tail += (" Оскільки джерелом є реаналіз для комірки сітки, значення відображають умови "
                  "регіону, а не безпосередні вимірювання на дослідній ділянці.")
     if extras: tail += " " + extras
@@ -837,30 +697,19 @@ def citation_block(source):
     """Бібліографічні посилання/подяки, яких вимагає джерело."""
     if source == "nasa":
         return ["NASA POWER: " + NASA_ACK, "https://power.larc.nasa.gov"]
-    if source == "openmeteo":
-        return list(OM_CITES) + ["Ліцензія даних: CC BY 4.0 (атрибуція обов'язкова)."]
     return []
 
 def licence_notice(source):
-    if source == "openmeteo":
-        return ("Open-Meteo: безкоштовний доступ — ЛИШЕ для некомерційного використання (публічні "
-                "дослідження в державних установах — дозволено; застосунки з підпискою чи "
-                "комерційні продукти — ні, потрібна платна підписка). Ліміти: 10 000 викликів/добу.")
     if source == "nasa":
         return ("NASA POWER: дані безкоштовні; NASA просить зазначати подяку в публікаціях "
                 "(текст додано до експорту). Не зловживайте частотою запитів.")
     return ""
 
-def estimate_om_calls(n_days, n_vars=9):
-    """Орієнтовна вага запиту Open-Meteo у «викликах» (за документацією: понад 10 змінних
-    або 2 тижні — дробове число викликів)."""
-    return max(1.0, (n_days / 14.0) * max(1.0, n_vars / 10.0))
-
 
 # ═══════════════════════════════════════════════════════════════
 # 13. ТАБЛИЦІ ЗА РОКАМИ, ДОВІЛЬНІ ПЕРІОДИ, ЗВІТ
 # ═══════════════════════════════════════════════════════════════
-# (ключ, назва, одиниця) — показники, придатні для передачі в аналізи як коваріати
+# (ключ, назва, одиниця) – показники, придатні для передачі в аналізи як коваріати
 INDICATOR_DEFS = [
     ("tmean", "Середня температура повітря", "°C"),
     ("prec_sum", "Сума опадів", "мм"),
@@ -878,21 +727,23 @@ INDICATOR_DEFS = [
     ("water_balance", "Водний баланс (опади − ET₀)", "мм"),
 ]
 
-def year_windows(series, window):
+def year_windows(series, window, years=None):
     """Календарні вікна window=(м1,д1,м2,д2) для кожного року, ПОВНІСТЮ покритого рядом.
-    Повертає (ok: [(рік, a, b, піддіапазон)], skipped: [(рік, a, b)] — перекриті частково)."""
+    years=(рік_від, рік_до) – залишити лише ці роки (None – усі). Повертає (ok: [(рік, a, b, піддіапазон)],
+    skipped: [(рік, a, b)] – перекриті частково)."""
     if not series.dates: return [], []
     m1, d1, m2, d2 = window
     smin, smax = series.dates[0], series.dates[-1]
     ok, skipped = [], []
     for y in range(smin.year - 1, smax.year + 1):
+        if years is not None and not (years[0] <= y <= years[1]): continue
         a, b = window_for_year(y, m1, d1, m2, d2)
         if a >= smin and b <= smax: ok.append((y, a, b, series.slice(a, b)))
         elif b >= smin and a <= smax: skipped.append((y, a, b))
     return ok, skipped
 
-def by_year_table(series, window, **kw):
-    ok, skipped = year_windows(series, window)
+def by_year_table(series, window, years=None, **kw):
+    ok, skipped = year_windows(series, window, years)
     rows = []
     for y, a, b, sub in ok:
         st = period_stats(sub, **kw)
@@ -914,8 +765,8 @@ def periods_table(series, periods, **kw):
     return rows
 
 def intervals_from_dates(dates, season_start=None, mode="between"):
-    """Періоди за датами замірів. mode='between' — між сусідніми замірами (перший —
-    від початку сезону, якщо він заданий); mode='cumulative' — від початку сезону до
+    """Періоди за датами замірів. mode='between' – між сусідніми замірами (перший –
+    від початку сезону, якщо він заданий); mode='cumulative' – від початку сезону до
     кожного заміру (потрібен season_start). Повертає [(назва, початок, кінець)]."""
     ds = sorted(set(dates)); out = []; prev = None
     for d in ds:
@@ -930,7 +781,7 @@ def intervals_from_dates(dates, season_start=None, mode="between"):
 
 def default_settings():
     return {"gdd_base": 10.0, "gdd_upper": None, "htc_method": "decade", "frost_thr": 0.0,
-            "window": (4, 1, 10, 31), "base_temps": (5.0, 10.0, 15.0)}
+            "window": (4, 1, 10, 31), "years": None, "base_temps": (5.0, 10.0, 15.0)}
 
 def stat_kwargs(settings):
     return {"base_temps": tuple(settings.get("base_temps", (5.0, 10.0, 15.0))),
@@ -938,7 +789,7 @@ def stat_kwargs(settings):
             "htc_method": settings.get("htc_method", "decade")}
 
 def build_report(series, settings, norm=None, periods=None):
-    """Єдиний розрахунковий звіт — вхід для вікна, графіків і експорту."""
+    """Єдиний розрахунковий звіт – вхід для вікна, графіків і експорту."""
     kw = stat_kwargs(settings)
     d0, d1 = series.dates[0], series.dates[-1]
     rep = {"settings": dict(settings), "series": series, "d0": d0, "d1": d1}
@@ -946,7 +797,7 @@ def build_report(series, settings, norm=None, periods=None):
     rep["total"]["water_balance"] = balance_water(series)
     rep["decades"] = table_by_groups(series, decade_key, decade_label, **kw)
     rep["months"] = table_by_groups(series, month_key, month_label, **kw)
-    rep["years"], rep["years_skipped"] = by_year_table(series, settings["window"], **kw)
+    rep["years"], rep["years_skipped"] = by_year_table(series, settings["window"], settings.get("years"), **kw)
     rep["norm"] = norm            # (norm_dict, years_list, label) або None
     if norm:
         nd = norm[0]
@@ -957,7 +808,7 @@ def build_report(series, settings, norm=None, periods=None):
     return rep
 
 def weather_set(rep, place="", lat=None, lon=None, source=""):
-    """Набір погодних показників за роками — для передачі в аналізи (ANCOVA тощо)."""
+    """Набір погодних показників за роками – для передачі в аналізи (ANCOVA тощо)."""
     years = {}
     for r in rep["years"]:
         years[str(r["year"])] = {k: (None if (isinstance(r.get(k), float) and math.isnan(r.get(k)))

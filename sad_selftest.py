@@ -7,12 +7,12 @@
 """
 import os, sys, io, tempfile, traceback, datetime as dt
 
-MODULES = ['sad_app', 'sad_assoc_core', 'sad_assoc_sections', 'sad_breeding', 'sad_breeding_core', 'sad_breeding_ui', 'sad_breeding_win', 'sad_cluster_pca', 'sad_common',
+MODULES = ['sad_app', 'sad_assoc_core', 'sad_assoc_sections', 'sad_breeding', 'sad_breeding_core', 'sad_breeding_ui', 'sad_breeding_win', 'sad_chart_style_dlg', 'sad_clip', 'sad_cluster_pca', 'sad_common',
            'sad_control_core', 'sad_corr_core', 'sad_corr_sections', 'sad_correlation', 'sad_descriptive_ttest', 'sad_design_core',
            'sad_design_sections', 'sad_gencorr_core', 'sad_gencorr_sections', 'sad_gxe_core', 'sad_het_ord_sections',
            'sad_heterosis_core', 'sad_homogeneous', 'sad_journal_trial', 'sad_manova', 'sad_mixed_core', 'sad_mixed_sections',
            'sad_ordinal_core', 'sad_regression', 'sad_repeated', 'sad_scheme_constructor', 'sad_selection_core',
-           'sad_selection_sections', 'sad_stability_ancova', 'sad_weather', 'sad_weather_charts', 'sad_weather_core', 'sad_weather_export']
+           'sad_selection_sections', 'sad_stability_ancova', 'sad_weather', 'sad_weather_charts', 'sad_weather_core', 'sad_weather_export', 'sad_worldmap']
 WINDOWS = ["CorrelationWindow", "DescriptiveWindow", "TTestWindow", "RegressionWindow", "ClusterWindow", "PCAWindow",
            "RepeatedMeasuresWindow", "MixedRepeatedWindow", "StabilityWindow", "AncovaWindow", "ManovaWindow", "FieldJournalWindow",
            "SchemeConstructorWindow", "WeatherWindow", "BreedingStabilityWindow", "GenParWindow", "CombAbilityWindow", "StressWindow",
@@ -87,6 +87,24 @@ def run(main_module, out_path=None):
         rg = np.random.default_rng(9)
         AC.eta_squared([rg.normal(m, 1, 8) for m in (0, 1, 2)]); AC.two_group_effects(rg.normal(0, 1, 12), rg.normal(.5, 1, 12), n_boot=50)
         AC.contingency_analysis([[12, 5, 3], [4, 9, 8]], n_boot=50, n_mc=500)
+    def t_worldmap():
+        import sad_worldmap as WM
+        D = WM.MapData.get()
+        assert len(D.pop) > 7000 and D.country_at(30.2109, 48.7543) == "Україна"
+        n = D.nearest(30.2109, 48.7543); assert n and "Умань" in D.full_label(n[0])
+        assert D.search("умань") and D.search("kyiv")
+        poly = WM.clip_polygon([-1e6, 1e6, 1e6, -1e6], [-1e6, -1e6, 1e6, 1e6], 0, 0, 100, 80); assert len(poly) == 4
+    def t_clip():
+        import sad_clip as SC
+        h = SC.build_html_table(["А", "Б"], [["1", "2"]]); hd, frag = SC.parse_cf_html(SC.cf_html(h)); assert frag == h and 'border="1"' in h
+    def t_chart_style():
+        import matplotlib; from matplotlib.figure import Figure
+        import sad_weather_core as W, sad_weather_charts as CH
+        s0 = dt.date(2022, 1, 1); n = 730; rg = np.random.default_rng(10); dts = [s0 + dt.timedelta(days=i) for i in range(n)]
+        t = 9 + 11 * np.sin(2 * np.pi * np.array([d.timetuple().tm_yday for d in dts]) / 365)
+        rep = W.build_report(W.DailySeries(dts, {"tmean": t, "tmax": t + 4, "tmin": t - 4, "prec": rg.random(n) * 5}), W.default_settings())
+        for kind, _ in CH.CHARTS:
+            f = Figure(); assert CH.build_chart(f, kind, rep, "Тест", {"general": {"width_cm": 18, "font_family": "DejaVu Sans"}, "colors": {kind: {}}}) is None, kind
     def t_scipy_misc():
         from scipy import stats, optimize, sparse, special, spatial
         from scipy.sparse.linalg import splu
@@ -94,7 +112,9 @@ def run(main_module, out_path=None):
         splu(sparse.eye(5, format="csc")); optimize.brentq(lambda x: x - 1, 0, 3)
     for n, f in (("розрахунок: тест Дуннетта", t_control), ("розрахунок: змішана модель REML", t_mixed), ("розрахунок: AMMI/GGE/стабільність", t_gxe),
                  ("розрахунок: генетичні параметри", t_breeding), ("розрахунок: кореляції (Кендалл, частинна)", t_corr),
-                 ("розрахунок: генотипні кореляції", t_gencorr), ("розрахунок: η, бісеріальні, спряженість", t_assoc), ("scipy: stats/special/sparse/spatial/optimize", t_scipy_misc)):
+                 ("розрахунок: генотипні кореляції", t_gencorr), ("розрахунок: η, бісеріальні, спряженість", t_assoc), ("scipy: stats/special/sparse/spatial/optimize", t_scipy_misc),
+                 ("карта світу: дані, країна, найближче місто, пошук, відсікання", t_worldmap), ("копіювання таблиці: HTML-формат буфера", t_clip),
+                 ("діаграми: усі 8 зі стилем користувача", t_chart_style)):
         _check(log, n, f)
     # 3. matplotlib і експорт
     def t_figs():
@@ -145,6 +165,13 @@ def run(main_module, out_path=None):
                 log.ok(f"вікно {name}")
             except Exception as e:
                 log.bad(f"вікно {name}", e)
+        try:
+            import sad_worldmap as WM
+            mp = WM.WorldMap(root, width=700, height=450); mp.size = lambda: (700, 450)       # головне вікно приховане – розмір задаємо явно
+            mp.goto(30.2, 48.75, 7.0); assert mp.stats["items"] > 20, mp.stats
+            mp.goto(31, 49, 5.5); assert mp.stats["items"] > 100, mp.stats; mp.destroy(); log.ok("віджет карти: малювання")
+        except Exception as e:
+            log.bad("віджет карти: малювання", e)
         try: root.destroy()
         except Exception: pass
     except Exception as e:

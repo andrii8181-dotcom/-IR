@@ -1,9 +1,9 @@
-# test_sad_weather_gui.py — повний тест вікна «Погода» (Xvfb + імітація мережі)
+# test_sad_weather_gui.py – повний тест вікна «Погода» (Xvfb + імітація мережі)
 import os, sys, json, math, tempfile, shutil, time, threading, datetime as dt
 real_sleep = time.sleep
-time.sleep = lambda s: None                      # пауза між запитами й норма — без очікування
+time.sleep = lambda s: None                      # пауза між запитами й норма – без очікування
 sys.path.insert(0, os.environ.get("SAD_SRC", os.path.dirname(os.path.abspath(__file__))))
-os.environ["SAD_WEATHER_CACHE"] = tempfile.mkdtemp(prefix="sadw_gui_cache_")
+os.environ["APPDATA"] = tempfile.mkdtemp(prefix="sadw_appdata_")      # налаштування діаграм пишуться в тимчасову теку
 os.environ.setdefault("DISPLAY", ":99")
 from urllib.parse import urlparse, parse_qs
 import numpy as np
@@ -36,17 +36,6 @@ def nasa_payload(a, b):
     return {"geometry": {"coordinates": [30.2218, 48.7484, 212.0]}, "properties": {"parameter": par},
             "header": {"fill_value": -999.0, "time_standard": "LST", "api": {"version": "v2.6"}},
             "parameters": {"ALLSKY_SFC_SW_DWN": {"units": "MJ/m^2/day"}}}
-def om_payload(a, b):
-    days = [a + dt.timedelta(days=i) for i in range((b - a).days + 1)]
-    tv = [_day_vals(d) for d in days]
-    return {"latitude": 48.75, "longitude": 30.25, "elevation": 215.0, "timezone": "Europe/Kyiv",
-            "daily": {"time": [d.isoformat() for d in days],
-                      "temperature_2m_mean": [round(v[0], 2) for v in tv], "temperature_2m_max": [round(v[0] + 4, 2) for v in tv],
-                      "temperature_2m_min": [round(v[0] - 4, 2) for v in tv], "precipitation_sum": [v[1] for v in tv],
-                      "relative_humidity_2m_mean": [70.0] * len(days), "wind_speed_10m_mean": [3.0] * len(days),
-                      "shortwave_radiation_sum": [15.0] * len(days),
-                      "et0_fao_evapotranspiration": [round(max(0, (v[0] + 3) * 0.2), 2) for v in tv],
-                      "sunshine_duration": [36000.0] * len(days)}}
 MODE = {"offline": False, "slow": 0.0}
 def fake_get(url, timeout=60):
     REQ.append(url)
@@ -56,11 +45,8 @@ def fake_get(url, timeout=60):
     if "power.larc.nasa.gov" in url:
         a = dt.datetime.strptime(q["start"][0], "%Y%m%d").date(); b = dt.datetime.strptime(q["end"][0], "%Y%m%d").date()
         return 200, json.dumps(nasa_payload(a, b))
-    if "archive-api.open-meteo.com" in url:
-        return 200, json.dumps(om_payload(dt.date.fromisoformat(q["start_date"][0]), dt.date.fromisoformat(q["end_date"][0])))
-    if "geocoding-api" in url:
-        return 200, json.dumps({"results": [{"name": "Умань", "latitude": 48.75, "longitude": 30.22,
-                                              "country": "Україна", "admin1": "Черкаська область"}]})
+    if "nominatim.openstreetmap.org" in url:
+        return 200, json.dumps([{"lat": "48.6830", "lon": "30.1650", "display_name": "Яблунівка, Уманський район, Черкаська область, Україна", "type": "village"}])
     return 404, "not found"
 W.http_get = fake_get
 
@@ -129,19 +115,42 @@ rec_l(root)
 check(any(t == "Погода" or t.endswith("Погода") for t in labels) or any("Погода" in t for t in labels), "пункт «Погода» є на головній сторінці")
 win = m.WeatherWindow(root); root.update()
 check(win.win.winfo_exists(), "вікно «Погода» відкрилось")
-check(win.src_var.get() == W.SOURCE_TITLES["nasa"], "джерело за замовчуванням — NASA POWER (безпечне для комерційного поширення)")
+check(win.src_var.get() == W.SOURCE_TITLES["nasa"], "джерело за замовчуванням – NASA POWER (безпечне для комерційного поширення)")
 check("NASA" in win.lic_lbl.cget("text"), "показано умови NASA (подяка)")
-win.src_var.set(W.SOURCE_TITLES["openmeteo"]); win._on_source(); root.update()
-check("некомерційного" in win.lic_lbl.cget("text") and win.model_row.winfo_ismapped(), "Open-Meteo: попередження про ліцензію + вибір моделі")
-check("викликів" in win.cost_lbl.cget("text"), f"показано вартість запиту: «{win.cost_lbl.cget('text')}»")
+import sad_weather_charts as CHm
+cbs = [w for w in win.win.winfo_children()]
+def all_widgets(w):
+    out = [w]
+    for c in w.winfo_children(): out += all_widgets(c)
+    return out
+srcs = [w for w in all_widgets(win.win) if w.winfo_class() == "TCombobox" and W.SOURCE_TITLES["nasa"] in (w.cget("values") or ())][0]
+check(list(srcs.cget("values")) == [W.SOURCE_TITLES["nasa"], W.SOURCE_TITLES["file"]], "у списку джерел лише NASA POWER і власні дані (Open-Meteo видалено)")
+txts = " ".join(w.cget("text") for w in all_widgets(win.win) if w.winfo_class() in ("Label", "Labelframe", "Button", "Checkbutton"))
+check("Open-Meteo" not in txts and "Кеш" not in txts and "кеш" not in txts and "Швидкий вибір" not in txts, "в інтерфейсі немає Open-Meteo, розділу «Кеш» і швидкого вибору українських міст")
+check([w.cget("text") for w in all_widgets(win.win) if w.winfo_class() == "Labelframe"] == ["1. Джерело даних", "2. Місце досліду", "3. Період і порівняння років", "4. Параметри розрахунку"],
+      "розділи ліворуч: 1–4 (розділ про кеш прибрано)")
+win.win.geometry("1100x640"); root.update()
+lcv = win.left_canvas; bb = lcv.bbox("all")
+vs_ = [x for x in all_widgets(lcv.master) if x.winfo_class() == "TScrollbar" and str(x.cget("orient")) == "vertical"][0]
+check(bb[3] > lcv.winfo_height() and vs_.get() != (0.0, 1.0), f"у низькому вікні (640 px) ліва колонка довша за вікно ({bb[3]} px) – з'являється вертикальна прокрутка")
+lcv.yview_moveto(1.0); root.update(); last = find_btn("Перерахувати", win.win)
+check(last is not None and last.winfo_rooty() + last.winfo_height() <= win.win.winfo_rooty() + win.win.winfo_height() + 2, "прокрутивши вниз, кнопку «Перерахувати» видно повністю")
+lcv.yview_moveto(0.0); win.win.geometry("1340x840"); root.update()
+check(find_btn("Обрати на карті", win.win) is not None and find_btn("Знайти за назвою", win.win) is not None, "є кнопки «Обрати на карті» і «Знайти за назвою» (пошук збережено)")
+check("не обрано" in win.coord_lbl.cget("text") and win.lat_var.get() == "" and win.lon_var.get() == "", "координати за замовчуванням порожні: місце потрібно обрати (програма не налаштована на Україну)")
+n = len(LOG["warn"]); win._start_fetch(); check(len(LOG["warn"]) == n + 1 and "Оберіть місце" in LOG["warn"][-1][1], "завантаження без обраного місця → пояснення, що робити")
 win.src_var.set(W.SOURCE_TITLES["file"]); win._on_source(); root.update()
 check(win.file_row.winfo_ismapped() and "файл" in win.btn_fetch.cget("text").lower(), "власні дані: кнопки файлу, кнопка «Відкрити файл…»")
 win.src_var.set(W.SOURCE_TITLES["nasa"]); win._on_source(); root.update()
 
 print("\n== 2. NASA: пресет, координати, період, завантаження у фоні")
-win.preset_var.set("Умань"); win._on_preset(); root.update()
-check(win.lat_var.get() == "48.7484" and win.lon_var.get() == "30.2218" and win.place_var.get() == "м. Умань", "пресет заповнив координати й назву")
-win.d0_var.set("01.01.2022"); win.d1_var.set("31.12.2024"); win._update_cost()
+win._set_point(48.7484, 30.2218, "Умань, Україна"); root.update()
+check(win.lat_var.get() == "48.7484" and win.lon_var.get() == "30.2218" and win.place_var.get() == "Умань, Україна" and "48,7484° пн. ш., 30,2218° сх. д." in win.coord_lbl.cget("text"),
+      "обране місце: координати, назва й підпис «48,7484° пн. ш., 30,2218° сх. д.»")
+win._set_point(50.4501, 30.5234, "Київ, Україна"); check(win.place_var.get() == "Київ, Україна", "автоназва оновлюється при виборі іншого місця")
+win.place_var.set("Моє поле"); win._set_point(48.7484, 30.2218, "Умань, Україна"); check(win.place_var.get() == "Моє поле", "назву, введену користувачем, не перезаписано")
+win.place_var.set("м. Умань")
+win.d0_var.set("01.01.2022"); win.d1_var.set("31.12.2024")
 REQ.clear()
 ok = fetch_and_wait(win)
 check(ok and win.series is not None and len(win.series) == 1096, f"завантажено {len(win.series) if win.series else 0} діб (очікувано 1096)")
@@ -159,6 +168,7 @@ tv = tree_rows(win.holders["months"])
 tagged = [tv.item(i, "tags") for i in tv.get_children()]
 check(any(t for t in tagged), "рядки ГТК розфарбовано за класом")
 check(win._fig is not None, "діаграма побудована")
+check((win.y0_var.get(), win.y1_var.get()) == ("2022", "2024") and "Повне покриття: 2022, 2023, 2024".replace("Повне", "повне") in win.win_lbl.cget("text"), "після завантаження роки порівняння = роки даних; підпис показує покриття")
 
 print("\n== 3. Кома/крапка у таблицях, метод ГТК")
 v_comma = tv.item(tv.get_children()[5], "values")
@@ -175,9 +185,14 @@ win.htc_var.set(list(SW.HTC_METHODS)[0]); win._recompute()
 win.base_var.set("abc"); n_w = len(LOG["warn"]); win._recompute()
 check(len(LOG["warn"]) == n_w + 1 and win.rep is not None, "некоректний параметр → зрозуміле попередження, вікно не падає")
 win.base_var.set("10")
-win.wfrom_var.set("13-45"); n_w = len(LOG["warn"]); win._recompute()
-check(len(LOG["warn"]) == n_w + 1 and "04-01" not in LOG["warn"][-1][1] and "13-45" in LOG["warn"][-1][1], "некоректне вікно ММ-ДД відхилено")
-win.wfrom_var.set("04-01")
+win.wm2_var.set("лютий"); win.wd2_var.set("31"); n_w = len(LOG["warn"]); win._recompute()
+check(len(LOG["warn"]) == n_w + 1 and "немає 31-го числа" in LOG["warn"][-1][1] and "лютий" in LOG["warn"][-1][1], "неіснуюча дата вікна (31 лютого) відхилена з поясненням")
+win._update_window_preview(); check("немає 31-го числа" in win.win_lbl.cget("text"), "підпис під вікном показує помилку одразу, без натискання кнопок")
+win.wm2_var.set("жовтень"); win.wd2_var.set("31"); win._update_window_preview()
+win.y0_var.set("2025"); win.y1_var.set("2022"); n_w = len(LOG["warn"]); win._recompute()
+check(len(LOG["warn"]) == n_w + 1 and "більший" in LOG["warn"][-1][1], "рік «від» більший за «до» → зрозуміле попередження")
+win.y0_var.set("abc"); n_w = len(LOG["warn"]); win._recompute(); check(len(LOG["warn"]) == n_w + 1 and "цілими числами" in LOG["warn"][-1][1], "нечисловий рік відхилено")
+win.y0_var.set("2022"); win.y1_var.set("2024"); win._update_window_preview()
 
 print("\n== 4. Усі діаграми через інтерфейс, збереження PNG/SVG/PDF")
 bad = []
@@ -189,6 +204,53 @@ win.chart_var.set("Діаграма Вальтера"); win._draw_chart()
 for ext in ("png", "svg", "pdf"):
     SAVE["path"] = os.path.join(TMP, f"chart.{ext}"); win._save_chart()
     check(os.path.exists(SAVE["path"]) and os.path.getsize(SAVE["path"]) > 2000, f"діаграма збережена як {ext.upper()} ({os.path.getsize(SAVE['path'])//1024} КБ)")
+
+print("\n== 4б. Легенда, налаштування діаграм, прокрутка")
+win.chart_var.set("Температура й опади за декадами"); win._draw_chart(); root.update()
+leg = [a.get_legend() for a in win._fig.axes if a.get_legend()]
+ltxt = " ".join(t.get_text() for l in leg for t in l.get_texts())
+check(leg and "Середня температура" in ltxt and "крива" in ltxt and "Сума опадів" in ltxt and "стовпчики" in ltxt, f"діаграма «Температура й опади за декадами» має легенду: «{ltxt[:90]}…»")
+win.chart_var.set("Порівняння років (температура й опади у вікні)"); win._draw_chart(); root.update()
+lt2 = " ".join(t.get_text() for a in win._fig.axes if a.get_legend() for t in a.get_legend().get_texts())
+check("Середня температура" in lt2 and "Сума опадів" in lt2, "порівняння років: легенда пояснює точки й стовпчики")
+win.chart_var.set("Температура й опади за декадами"); win._draw_chart(); root.update()
+cb_ = find_btn("Налаштування", win.tab_ch); check(cb_ is not None and find_btn("Зберегти", win.tab_ch) is not None and find_btn("Копіювати", win.tab_ch) is not None, "біля діаграми три кнопки: Зберегти, Копіювати, Налаштування")
+cb_.invoke(); root.update()
+sdlg = win._style_dlg; check(sdlg.win.winfo_exists(), "діалог налаштувань відкрився")
+sdlg.gv["width_cm"].set("20"); sdlg.gv["height_cm"].set("11"); sdlg.gv["font_size"].set("12"); sdlg.gv["title_size"].set("15"); sdlg.gv["title_bold"].set(True)
+sdlg.gv["grid"].set(True); sdlg.gv["legend_loc"].set("під графіком"); sdlg.gv["font_family"].set("DejaVu Sans"); sdlg.title_var.set("Мій власний заголовок")
+sdlg.set_color("tmean", "#006d2c"); sdlg.set_color("prec", "#fd8d3c")
+st_new = sdlg.apply(); root.update()
+check(st_new is not None and win.chart_style["general"]["width_cm"] == 20 and win.chart_style["colors"]["climo_decade"] == {"tmean": "#006d2c", "prec": "#fd8d3c"}
+      and win.chart_style["titles"]["climo_decade"] == "Мій власний заголовок", "налаштування застосовано до стилю вікна")
+w_in, h_in = win._fig.get_size_inches(); check(abs(w_in - 20 / 2.54) < 0.011 and abs(h_in - 11 / 2.54) < 0.011, f"розмір діаграми 20×11 см → {w_in:.3f}×{h_in:.3f} дюйма (точність до 1 пікселя екрана)")
+cw = win._canvas.get_tk_widget(); dpi_ = win._fig.dpi
+check(abs(cw.winfo_reqwidth() - w_in * dpi_) <= 2 and abs(cw.winfo_reqheight() - h_in * dpi_) <= 2 and cw.winfo_reqwidth() < 1000,
+      f"полотно у вікні має заданий розмір {cw.winfo_reqwidth()}×{cw.winfo_reqheight()} px (= {w_in:.2f}×{h_in:.2f} дюйма при {dpi_:.0f} dpi екрана; не розтягується під вікно)")
+ax0 = win._fig.axes[0]; ttl = ax0.get_title(loc="left"); check(ttl.startswith("Мій власний заголовок") and ax0.title.get_fontsize() == 15 and ax0.title.get_fontweight() == "bold", "власний заголовок, розмір 15 і жирний шрифт застосовано")
+lines_ = [l for l in ax0.get_lines() if l.get_color() == "#006d2c"]; check(len(lines_) >= 1, "колір кривої температури змінено на обраний")
+bars = [pt.get_facecolor() for a in win._fig.axes for pt in a.patches][:1]; import matplotlib.colors as mcol
+check(bars and mcol.to_hex(bars[0][:3]) == "#fd8d3c", "колір стовпчиків опадів змінено на обраний")
+check(win._fig.axes[0].xaxis.get_gridlines()[0].get_visible() or win._fig.axes[0].yaxis.get_gridlines()[0].get_visible(), "сітка ввімкнена")
+import json as _j, sad_weather_charts as CHm2
+sp = CHm2.style_path(); check(os.path.exists(sp) and _j.load(open(sp, encoding="utf-8"))["general"]["width_cm"] == 20, "налаштування збережено на диск (діють і в наступних сеансах)")
+check(CHm2.load_style()["titles"]["climo_decade"] == "Мій власний заголовок", "збережене читається назад")
+SAVE["path"] = os.path.join(TMP, "styled.png"); win._save_chart()
+from PIL import Image as _Im
+im = _Im.open(SAVE["path"]); check(abs(im.size[0] - 20 / 2.54 * 300) <= 1 and abs(im.size[1] - 11 / 2.54 * 300) <= 1, f"PNG точно 20×11 см у роздільності 300 dpi: {im.size[0]}×{im.size[1]} px (очікувано {round(20/2.54*300)}×{round(11/2.54*300)})")
+win.chart_var.set("ГТК за місяцями"); win._draw_chart(); root.update()
+check(abs(win._fig.get_size_inches()[0] - 20 / 2.54) < 0.011, "загальні параметри (розмір, шрифт) діють на всі діаграми")
+check(win.chart_style.get("colors", {}).get("htc_month") is None, "кольори окремі для кожної діаграми: для ГТК за місяцями лишились типові")
+bad_ = sdlg.gv["width_cm"].set("abc"); n_w = len(LOG["warn"]); r_ = sdlg.apply(); check(r_ is None and len(LOG["warn"]) == n_w + 1 and "Ширина" in LOG["warn"][-1][1], "некоректне значення в налаштуваннях → пояснення, стиль не змінено")
+sdlg.reset_all(); sdlg.apply(); root.update()
+check(win.chart_style["general"] == CHm2.sanitize_general({}) and "climo_decade" not in win.chart_style.get("colors", {}) and not win.chart_style.get("titles"), "«Усе до типових» повертає початковий вигляд")
+sdlg.win.destroy()
+def hsb_in(w): return [x for x in all_widgets(w) if x.winfo_class() == "TScrollbar" and str(x.cget("orient")) == "horizontal"]
+check(len(hsb_in(win.tab_ch)) == 1 and len(hsb_in(win.tab_sum)) == 1 and len(hsb_in(win.tab_pub)) == 1 and len(hsb_in(win.tab_day)) == 1 and len(hsb_in(win.tab_per)) >= 1,
+      "горизонтальна прокрутка є на вкладках: Підсумок, Добові дані, Періоди, Графіки, Для публікації")
+check(all(len(hsb_in(win.holders[k].master)) >= 1 for k in ("decades", "months", "years")), "горизонтальна прокрутка є й у таблицях «Декади», «Місяці», «За роками»")
+win.txt_sum._wrap_var.set(False); win.txt_sum.configure(wrap="none"); check(win.txt_sum.cget("wrap") == "none", "у «Підсумку» можна вимкнути перенесення рядків")
+win.txt_sum._wrap_var.set(True); win.txt_sum.configure(wrap="word")
 
 print("\n== 5. Експорт: Excel, Word, CSV, погодний набір, текст")
 import openpyxl, docx
@@ -205,6 +267,14 @@ SAVE["path"] = os.path.join(TMP, "w.txt"); win._save_pub()
 check("МЕТОДИКА ЗБОРУ МЕТЕОДАНИХ" in open(SAVE["path"], encoding="utf-8").read(), "текст для публікації збережено")
 win._copy_table("months"); clip = win.win.clipboard_get()
 check(clip.startswith("Місяць\t") and clip.count("\n") == 36, "копіювання таблиці в буфер (TSV, 36 рядків)")
+check(sys.platform == "win32" or "як текст" in win.status_var.get(), "поза Windows користувача чесно попереджено, що в буфері текст (сітку дає Windows або кнопка «Word»)")
+import sad_clip as SCm
+captured = {}
+SCm.copy_table = lambda widget, headers, rows, fills=None, tsv=None: captured.update(h=headers, r=rows, f=fills, t=tsv) or "html"
+win._copy_table("months")
+check(captured["h"][0] == "Місяць" and len(captured["r"]) == 36 and captured["t"].startswith("Місяць\t") and any(captured["f"]), "для копіювання з сіткою передаються заголовки, 36 рядків, кольори ГТК й текст TSV")
+check("із сіткою" in win.status_var.get() and "Word" in win.status_var.get(), "статус: «таблицю скопійовано разом із сіткою й кольорами»")
+SCm.copy_table = __import__("importlib").reload(SCm).copy_table
 SAVE["path"] = None; win._export_xlsx(); win._export_docx(); win._export_csv()
 check(True, "скасування діалогу збереження не призводить до помилок")
 ASK["ans"] = True
@@ -249,20 +319,57 @@ ASK["ans"] = True
 win.ny0.set("1991"); win.ny1.set(str(dt.date.today().year)); n = len(LOG["warn"]); win._load_norm()
 check(len(LOG["warn"]) == n + 1, "незавершений рік у нормі відхилено")
 
-print("\n== 8. Open-Meteo: завантаження, відстань до комірки, великий запит")
-win.src_var.set(W.SOURCE_TITLES["openmeteo"]); win._on_source()
-win.d0_var.set("01.01.2023"); win.d1_var.set("31.12.2023"); REQ.clear()
-ok = fetch_and_wait(win)
-check(ok and len(win.series) == 365 and all("archive-api.open-meteo.com" in u and "timezone=auto" in u for u in REQ), "Open-Meteo: 365 діб, timezone=auto")
-txt = win.txt_sum.get("1.0", "end")
-check("відстань від точки" in txt and "Europe/Kyiv" in txt, "підсумок: відстань до центру комірки й часовий пояс")
-check(win.series.has("et0") and "Водний баланс" in txt, "є ET₀ й водний баланс")
-win.d0_var.set("01.01.1960"); win.d1_var.set("31.12.2023"); ASK["ans"] = False; n_req = len(REQ); n = len(LOG["ask"])
-win._start_fetch(); pump(lambda: False, 0.3)
-check(len(LOG["ask"]) == n + 1 and "10 000" in LOG["ask"][-1][1] and len(REQ) == n_req and win.series is not None and len(win.series) == 365,
-      "64 роки в Open-Meteo: попередження про вартість, за відмови запитів нема, дані не втрачено")
-ASK["ans"] = True
-win.d0_var.set("01.01.1930"); n = len(LOG["warn"]); win._start_fetch(); check(len(LOG["warn"]) == n + 1 and "1940" in LOG["warn"][-1][1], "дата раніше початку джерела відхилена")
+print("\n== 8. Роки й вікно порівняння: зрозумілий підпис, період, фільтр")
+win.d0_var.set("01.01.2021"); win.d1_var.set("31.12.2024"); REQ.clear(); win._years_touched = False
+ok = fetch_and_wait(win); check(ok and len(win.series) == 1461, "завантажено 2021–2024 для перевірки порівняння років")
+check((win.y0_var.get(), win.y1_var.get()) == ("2021", "2024"), "роки порівняння автоматично = роки завантаженого періоду")
+lbl = win.win_lbl.cget("text")
+check("Буде порівняно 4 роки" in lbl and "2021: 01.04–31.10.2021" in lbl and "2024: 01.04–31.10.2024" in lbl and "1 квітня – 31 жовтня" in lbl, f"підпис пояснює, які саме роки й відрізки порівнюються: «{lbl[:110]}…»")
+check(len(tree_rows(win.holders["years"]).get_children()) == 4, "таблиця «За роками»: 4 роки")
+win.y0_var.set("2022"); win.y1_var.set("2023"); win._years_touched = True; win._recompute(); root.update()
+check(len(tree_rows(win.holders["years"]).get_children()) == 2 and [r["year"] for r in win.rep["years"]] == [2022, 2023], "якщо вказати роки 2022–2023, у порівнянні лишаються лише вони")
+win.chart_var.set("Порівняння років (температура й опади у вікні)"); win._draw_chart(); root.update()
+check(len(win._fig.axes[1].patches) == 2, "діаграма порівняння років показує лише 2 вибрані роки")
+win.y0_var.set("2019"); win.y1_var.set("2024"); win._update_window_preview()
+check("Немає даних: 2019, 2020" in win.win_lbl.cget("text"), "підпис попереджає про роки без даних у завантаженому ряді")
+win.wm1_var.set("листопад"); win.wd1_var.set("1"); win.wm2_var.set("лютий"); win.wd2_var.set("28"); win.y0_var.set("2021"); win.y1_var.set("2023"); win._update_window_preview()
+check("Кінець вікна припадає на наступний рік" in win.win_lbl.cget("text") and "2021: 01.11–28.02.2022" in win.win_lbl.cget("text"), "вікно через Новий рік: підпис пояснює, що кінець у наступному році")
+win.wm1_var.set("квітень"); win.wd1_var.set("1"); win.wm2_var.set("жовтень"); win.wd2_var.set("31")
+win.y0_var.set("2020"); win.y1_var.set("2023"); win._apply_season(); root.update()
+check(win.d0_var.get() == "01.04.2020" and win.d1_var.get() == "31.10.2023" and "Натисніть «Отримати дані»" in win.status_var.get(), "«Встановити період…» задає 01.04.2020 – 31.10.2023")
+win.wm1_var.set("жовтень"); win.wd1_var.set("15"); win.wm2_var.set("квітень"); win.wd2_var.set("15"); win.y0_var.set("2020"); win.y1_var.set("2021"); win._apply_season()
+check(win.d0_var.get() == "15.10.2020" and win.d1_var.get() == "15.04.2022", "вікно через Новий рік: кінець останнього року – у наступному році")
+win.wm1_var.set("квітень"); win.wd1_var.set("1"); win.wm2_var.set("жовтень"); win.wd2_var.set("31")
+win._calendar_years_dlg(); cd = [t for t in toplevels(win.win) if t.title() == "Календарні роки"][0]; find_btn("OK", cd).invoke(); root.update()
+check(win.d0_var.get().startswith("01.01.") and win.d1_var.get().startswith("31.12."), "«Календарні роки…» задає 01.01 – 31.12")
+win.y0_var.set("2022"); win.y1_var.set("2024"); win._years_touched = False
+
+print("\n== 8б. Місце: карта й пошук")
+import sad_worldmap as WMm
+WMm.MapPickerDialog.show = lambda self: (self.win.update(), {"lat": 50.4501, "lon": 30.5234, "label": "Київ, Україна"})[1]
+win.lat_var.set(""); win.lon_var.set(""); win.place_var.set(""); win._auto_place = ""
+win._pick_on_map(); root.update()
+check(win.lat_var.get() == "50.4501" and win.lon_var.get() == "30.5234" and win.place_var.get() == "Київ, Україна", "вибір на карті переносить координати й назву у вікно")
+for tl in [t for t in toplevels(win.win) if "карті" in t.title()]: tl.destroy()
+win._geocode_dlg(); root.update(); ps = win._geo_ps
+ps.qv.set("умань"); ps.search(); check(ps.found and ps.found[0]["label"].startswith("Умань") and abs(ps.found[0]["lat"] - 48.754) < 0.01, "пошук за назвою: «умань» знайдено серед міст світу (без інтернету)")
+REQ.clear(); ps.qv.set("Яблунівка"); ps.search(); check(ps.found == [] or "Яблунівка" not in str(ps.found), "офлайн-пошук не знаходить маленьке село (довідник міст)")
+ps.search_online(); check(len(REQ) == 1 and "nominatim" in REQ[0] and ps.found and ps.found[0]["lat"] == 48.683, "онлайн-пошук (OpenStreetMap) знаходить село; один запит на натискання")
+ps.lb.selection_clear(0, "end"); ps.lb.selection_set(0); ps.pick(); root.update()
+check(win.lat_var.get() == "48.6830" and win._geo_dlg.winfo_exists() is False if False else win.lat_var.get() == "48.6830", "вибір результату пошуку заповнює координати")
+MODE["offline"] = True
+win._geocode_dlg(); root.update(); ps = win._geo_ps; ps.qv.set("Село"); n = len(LOG["warn"]); ps.search_online()
+check(len(LOG["warn"]) == n + 1 and "з'єднання" in LOG["warn"][-1][1], "онлайн-пошук без інтернету → зрозуміле повідомлення, вікно не падає")
+MODE["offline"] = False
+for tl in [t for t in toplevels(win.win) if "Пошук" in t.title()]: tl.destroy()
+win._set_point(48.7484, 30.2218, "")
+win._coords_dlg(); root.update(); la_v, lo_v = win._coords_vars
+check(la_v.get() == "48.7484" and lo_v.get() == "30.2218", "діалог «Координати…» відкривається з поточними значеннями")
+la_v.set("48°45'N"); lo_v.set("30°13'E"); win._coords_ok(); root.update()
+check(abs(float(win.lat_var.get()) - 48.75) < 1e-4 and abs(float(win.lon_var.get()) - 30.2167) < 1e-4 and "48,7500° пн. ш." in win.coord_lbl.cget("text"), "ручне введення у форматі ГМС: 48°45'N, 30°13'E → 48,7500°, 30,2167°")
+win._coords_dlg(); la_v, lo_v = win._coords_vars; la_v.set("95"); lo_v.set("10"); n = len(LOG["warn"]); old_lat = win.lat_var.get(); win._coords_ok()
+check(len(LOG["warn"]) == n + 1 and "широта" in LOG["warn"][-1][1] and win.lat_var.get() == old_lat, "широта 95° відхилена з поясненням, значення не змінено")
+win._coords_win.destroy(); win._set_point(48.7484, 30.2218, "")
 
 print("\n== 9. Аварійні сценарії")
 win.src_var.set(W.SOURCE_TITLES["nasa"]); win._on_source(); win.d0_var.set("01.01.2019"); win.d1_var.set("30.06.2019")
@@ -270,9 +377,8 @@ MODE["offline"] = True; n = len(LOG["error"]); had = win.series
 win._start_fetch(); pump(lambda: len(LOG["error"]) > n, 10)
 check(len(LOG["error"]) == n + 1 and "з'єднання" in LOG["error"][-1][1], "немає інтернету → зрозуміле повідомлення")
 check(not win._busy and win.series is had, "після помилки вікно працездатне, попередні дані збережено")
-MODE["offline"] = False; win.nocache_var.set(True)
+MODE["offline"] = False
 ok = fetch_and_wait(win); check(ok and len(win.series) == 181, "повторна спроба після відновлення мережі успішна (181 доба)")
-win.nocache_var.set(False)
 win.lat_var.set("95"); n = len(LOG["warn"]); win._start_fetch(); check(len(LOG["warn"]) == n + 1 and "широта" in LOG["warn"][-1][1], "широта 95° відхилена з поясненням")
 win.lat_var.set("48°45'N"); win.lon_var.set("30°13'E"); win._start_fetch(); pump(lambda: not win._busy, 10)
 check(abs(win.ctx["lat"] - 48.75) < 1e-9 and abs(win.ctx["lon"] - 30.21666667) < 1e-6, "координати у форматі ГМС розпізнано")
@@ -304,7 +410,7 @@ check(win.series is not None and len(win.series) == 3 and abs(win.series.get("tm
 
 print("\n== 11. Закриття вікна під час завантаження")
 win2 = m.WeatherWindow(root); root.update()
-win2.preset_var.set("Київ"); win2._on_preset(); win2.d0_var.set("01.01.2021"); win2.d1_var.set("31.12.2023")
+win2._set_point(50.4501, 30.5234, "Київ"); win2.d0_var.set("01.01.2021"); win2.d1_var.set("31.12.2023")
 MODE["slow"] = 0.4
 win2._start_fetch(); real_sleep(0.2)
 win2._close(); root.update()
@@ -316,9 +422,12 @@ MODE["slow"] = 0.0
 print("\n== 12. Довідка")
 win._show_help(); root.update()
 hw = [t for t in toplevels(win.win) if "Довідка" in t.title()]
-check(hw and "КОМЕРЦІЙНОГО" in hw[0].winfo_children()[0].winfo_children()[1].get("1.0", "end"), "довідка відкривається й містить попередження про ліцензію")
+htxt = hw[0].winfo_children()[0].winfo_children()[1].get("1.0", "end") if hw else ""
+check(hw and "вбудовану карту світу" in htxt and "ПОРІВНЯННЯ РОКІВ" in htxt and "ГРАФІКИ" in htxt, "довідка відкривається й описує карту, порівняння років і налаштування графіків")
+for bad in ("Open-Meteo", "КОМЕРЦІЙНОГО", "кеш", "Польовий", "Божко", "ТЕС, 2004"):
+    check(bad not in htxt, f"у довідці немає згадки «{bad}»")
 
-shutil.rmtree(TMP, ignore_errors=True); shutil.rmtree(os.environ["SAD_WEATHER_CACHE"], ignore_errors=True)
+shutil.rmtree(TMP, ignore_errors=True); shutil.rmtree(os.environ["APPDATA"], ignore_errors=True)
 root.destroy()
 print("\n" + "=" * 60)
 if FAIL:

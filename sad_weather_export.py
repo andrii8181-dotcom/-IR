@@ -1,4 +1,4 @@
-# sad_weather_export.py — S.A.D. v2.1: експорт модуля «Погода» (без tkinter)
+# sad_weather_export.py – S.A.D. v2.1: експорт модуля «Погода» (без tkinter)
 # -*- coding: utf-8 -*-
 import io, math, datetime as dt
 import numpy as np
@@ -8,7 +8,7 @@ HTC_FILL = {"d4": "F4B6B6", "d3": "F8CBAD", "d2": "FCE4D6", "d1": "FFF2CC",
             "ok": "E2EFDA", "wet": "DDEBF7", "na": "FFFFFF"}
 
 
-def fnum(v, nd=1, comma=False, dash="—"):
+def fnum(v, nd=1, comma=False, dash="–"):
     if v is None or (isinstance(v, float) and math.isnan(v)):
         return dash
     s = f"{v:.{nd}f}"
@@ -16,15 +16,15 @@ def fnum(v, nd=1, comma=False, dash="—"):
 
 
 def fmt_stamp(stamp):
-    """ISO-мітка часу → «09.10.2026 18:31» (для людей); порожнє → «—»."""
-    if not stamp: return "—"
+    """ISO-мітка часу → «09.10.2026 18:31» (для людей); порожнє → «–»."""
+    if not stamp: return "–"
     try: return dt.datetime.fromisoformat(stamp).strftime("%d.%m.%Y %H:%M")
     except ValueError: return str(stamp)
 
 
 def htc_label(v):
     lab, key = W.htc_class(v)
-    return "—" if key == "na" else lab
+    return "–" if key == "na" else lab
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -213,7 +213,7 @@ def daily_table(series, base=10.0):
 
 
 def export_csv_daily(path, series, comma=False, sep=";", base=10.0):
-    """CSV добових даних (UTF-8 із BOM — Excel коректно читає кирилицю)."""
+    """CSV добових даних (UTF-8 із BOM – Excel коректно читає кирилицю)."""
     headers, rows, nds = daily_table(series, base)
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         f.write(sep.join(headers) + "\r\n")
@@ -229,7 +229,7 @@ def export_csv_daily(path, series, comma=False, sep=";", base=10.0):
 # ═══════════════════════════════════════════════════════════════
 def make_meta(rep, place, lat, lon, source):
     s = rep["series"]; st = rep["settings"]; mt = s.meta
-    rows = [("Місце", place or "—"),
+    rows = [("Місце", place or "–"),
             ("Координати точки", "не вказано" if lat is None or lon is None
              else f"{lat:.4f}° пн. ш., {lon:.4f}° сх. д."),
             ("Джерело даних", W.SOURCE_TITLES.get(source, source)),
@@ -243,7 +243,6 @@ def make_meta(rep, place, lat, lon, source):
         rows.append(("Висота комірки сітки, м", f"{mt['grid_elevation_m']:.0f}"))
     if mt.get("timezone"): rows.append(("Часовий пояс (межі доби)", mt["timezone"]))
     if mt.get("time_standard"): rows.append(("Стандарт часу", mt["time_standard"]))
-    if mt.get("model"): rows.append(("Модель реаналізу", mt["model"]))
     m1, d1, m2, d2 = st["window"]
     rows += [("Біологічний мінімум для СЕТ, °C", f"{st['gdd_base']:g}"),
              ("Облік активних температур у ГТК", {"decade": "декадний", "month": "місячний",
@@ -265,9 +264,9 @@ def publication_text(rep, place, lat, lon, source, extras=None):
     notes = W.quality_notes(series, source, rep["d0"], rep["d1"])
     if rep["years_skipped"]:
         notes.append("Для років " + ", ".join(str(y) for y, _, _ in rep["years_skipped"]) +
-                     " вікно порівняння покрито лише частково — ці роки не включено до таблиці за роками.")
+                     " вікно порівняння покрито лише частково – ці роки не включено до таблиці за роками.")
     if notes: parts += ["", "ПРИМІТКИ ЩОДО ЯКОСТІ ДАНИХ"] + [f"• {n}" for n in notes]
-    parts += ["", "ШКАЛА ВОЛОГОЗАБЕЗПЕЧЕНОСТІ ЗА ГТК", W.HTC_SCALE_TEXT, "Джерело шкали: " + W.HTC_SOURCE]
+    parts += ["", "ШКАЛА ВОЛОГОЗАБЕЗПЕЧЕНОСТІ ЗА ГТК", W.HTC_SCALE_TEXT]
     return "\n".join(parts)
 
 
@@ -432,11 +431,11 @@ def export_docx(path, rep, meta_rows, pub_text, figures, comma=True):
     n_tab = 0
     for spec in all_specs(rep):
         if spec["key"] == "total": continue
-        if spec["key"] == "decades" and len(spec["rows"]) > 45: continue   # надто довга для тексту — є в Excel
+        if spec["key"] == "decades" and len(spec["rows"]) > 45: continue   # надто довга для тексту – є в Excel
         headers, rows, classes = to_strings(spec, comma, compact=True)
         if not rows: continue
         n_tab += 1
-        para(f"Таблиця {n_tab} — {spec['title']}", italic=True, space_after=3)
+        para(f"Таблиця {n_tab} – {spec['title']}", italic=True, space_after=3)
         tbl = doc.add_table(rows=1 + len(rows), cols=len(headers)); tbl.style = "Table Grid"
         tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
         for j, hd in enumerate(headers):
@@ -455,14 +454,14 @@ def export_docx(path, rep, meta_rows, pub_text, figures, comma=True):
     for k, (cap, png) in enumerate(figures, 1):
         doc.add_picture(io.BytesIO(png), width=Cm(16))
         doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        para(f"Рис. {k} — {cap}", align="center", size=11)
+        para(f"Рис. {k} – {cap}", align="center", size=11)
 
     headings = {"ДЖЕРЕЛА": "Джерела даних", "ПРИМІТКИ": "Примітки щодо якості даних",
                 "ШКАЛА": "Шкала вологозабезпеченості за ГТК"}
     for blk in blocks[1:]:
         lines = blk.split("\n")
         key = next((k for k in headings if lines and lines[0].startswith(k)), None)
-        if key is None:                       # напр. «УМОВИ ВИКОРИСТАННЯ» — службова інформація, не для тексту
+        if key is None:                       # напр. «УМОВИ ВИКОРИСТАННЯ» – службова інформація, не для тексту
             continue
         para(headings[key], bold=True, size=11, space_after=2)
         for ln in lines[1:]:
@@ -470,11 +469,11 @@ def export_docx(path, rep, meta_rows, pub_text, figures, comma=True):
     doc.save(path)
 
 
-def figure_png(rep, kind, place, build_chart, size=(9.0, 5.2), dpi=200):
+def figure_png(rep, kind, place, build_chart, size=(9.0, 5.2), dpi=200, style=None):
     """PNG-байти діаграми, побудованої без вікна (для Word). build_chart передається ззовні,
     щоб цей модуль не залежав від matplotlib при імпорті."""
     from matplotlib.figure import Figure
     fig = Figure(figsize=size, dpi=dpi)
-    res = build_chart(fig, kind, rep, place)
+    res = build_chart(fig, kind, rep, place, style) if style is not None else build_chart(fig, kind, rep, place)
     if res: return None
     buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight"); return buf.getvalue()
