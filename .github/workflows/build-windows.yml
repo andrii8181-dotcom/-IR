@@ -36,6 +36,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-build.txt
 
+      - name: Залежності тестів (необов'язково, для розпізнавання QR)
+        continue-on-error: true
+        run: pip install -r requirements-test.txt
+
       - name: Тести (без графічного інтерфейсу)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests }}
         run: python run_tests.py
