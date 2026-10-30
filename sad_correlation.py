@@ -397,7 +397,7 @@ class CorrelationWindow:
   Мінімум: 2 стовпці (показники) по ≥ 3 значення.
 
   Вставте дані з Excel: скопіюйте в Excel → клік на першу
-  клітинку таблиці → кнопка «Вставити з Excel».
+  клітинку таблиці → кнопка «Вставити з буфера» (або «📥 Excel…» для файла).
 
 КРОК 2. ЗАПУСК АНАЛІЗУ
   Натисніть «▶ Аналіз» → з'явиться вікно параметрів.
@@ -491,62 +491,44 @@ class CorrelationWindow:
 
     # ── Меню ──────────────────────────────────────────────────
     def _build_menu(self):
+        """Меню лише для проєктів: усе, що стосується таблиці та даних, – на панелі (раніше «Правка» дублювала кнопку «Налаштування»)."""
         mb = tk.Menu(self.win)
         fm = tk.Menu(mb, tearoff=0)
         fm.add_command(label="Зберегти проект", command=self._save_proj)
         fm.add_command(label="Відкрити проект", command=self._load_proj)
-        fm.add_separator()
-        fm.add_command(label="Завантажити Excel", command=self._load_excel)
         mb.add_cascade(label="Файл", menu=fm)
-        em = tk.Menu(mb, tearoff=0)
-        em.add_command(label="Додати рядок",     command=self.add_row)
-        em.add_command(label="Видалити рядок",   command=self.del_row)
-        em.add_command(label="Додати стовпчик",  command=self.add_col)
-        em.add_command(label="Видалити стовпчик",command=self.del_col)
-        mb.add_cascade(label="Правка", menu=em)
         self.win.config(menu=mb)
 
     # ── Панель інструментів ───────────────────────────────────
     def _build_toolbar(self):
+        """Три групи: «Аналіз» (кореляція й частинна), «Дані» (буфер, Excel, журнал, правка таблиці) і перехід до інших видів зв'язку."""
         tb = tk.Frame(self.win, padx=6, pady=5); tb.pack(fill=tk.X)
-        tk.Button(tb, text="▶ Аналіз", bg="#c62828", fg="white",
-                  font=("Times New Roman", 13),
-                  command=self._run_analysis).pack(side=tk.LEFT, padx=4)
-        self._settings_btn = tk.Menubutton(tb, text="⚙ Налаштування ▾",
-                                           font=("Times New Roman", 11),
-                                           relief=tk.RAISED, bd=2)
-        self._settings_btn.pack(side=tk.LEFT, padx=4)
+        fnt = ("Times New Roman", 11)
+        def sep(): ttk.Separator(tb, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=2)
+        def grp(text): tk.Label(tb, text=text, font=("Times New Roman", 9, "bold"), fg="#1a4b8c").pack(side=tk.LEFT, padx=(0, 4))
+        grp("Аналіз:")
+        tk.Button(tb, text="▶ Аналіз", bg="#c62828", fg="white", font=("Times New Roman", 13), command=self._run_analysis).pack(side=tk.LEFT, padx=4)
+        tk.Button(tb, text="🧮 Частинна кореляція", bg="#6b3a8c", fg="white", font=fnt, command=self._partial_dialog).pack(side=tk.LEFT, padx=4)
+        sep(); grp("Дані:")
+        tk.Button(tb, text="Вставити з буфера", font=fnt, command=self._paste).pack(side=tk.LEFT, padx=3)
+        tk.Button(tb, text="📥 Excel…", font=fnt, command=self._load_excel).pack(side=tk.LEFT, padx=3)
+        tk.Button(tb, text="📂 З польового журналу", bg="#1a6b8c", fg="white", font=fnt, command=self._open_indicators_from_journal).pack(side=tk.LEFT, padx=3)
+        self._settings_btn = tk.Menubutton(tb, text="⚙ Таблиця ▾", font=fnt, relief=tk.RAISED, bd=2); self._settings_btn.pack(side=tk.LEFT, padx=3)
         sm = tk.Menu(self._settings_btn, tearoff=0)
-        sm.add_command(label="Додати рядок",      command=self.add_row)
-        sm.add_command(label="Видалити рядок",    command=self.del_row)
-        sm.add_separator()
-        sm.add_command(label="Додати стовпець",   command=self.add_col)
-        sm.add_command(label="Видалити стовпець", command=self.del_col)
-        sm.add_separator()
+        sm.add_command(label="Додати рядок", command=self.add_row); sm.add_command(label="Видалити рядок", command=self.del_row); sm.add_separator()
+        sm.add_command(label="Додати стовпець", command=self.add_col); sm.add_command(label="Видалити стовпець", command=self.del_col); sm.add_separator()
         sm.add_command(label="🗑 Очистити таблицю", command=self._clear_table)
         self._settings_btn["menu"] = sm
-        tk.Button(tb, text="🧮 Частинна кореляція", bg="#6b3a8c", fg="white",
-                  font=("Times New Roman", 11),
-                  command=self._partial_dialog).pack(side=tk.LEFT, padx=4)
-        tk.Button(tb, text="🧬 Генотипні кореляції", bg="#2e7d32", fg="white",
-                  font=("Times New Roman", 11),
-                  command=self._open_gencorr).pack(side=tk.LEFT, padx=4)
-        tk.Button(tb, text="🔗 Різні типи змінних", bg="#b35900", fg="white",
-                  font=("Times New Roman", 11),
-                  command=self._open_assoc).pack(side=tk.LEFT, padx=4)
-        tk.Button(tb, text="Вставити з буфера",
-                  font=("Times New Roman", 11),
-                  command=self._paste).pack(side=tk.LEFT, padx=4)
-        tk.Button(tb, text="📂 Відкрити показники", bg="#1a6b8c", fg="white",
-                  font=("Times New Roman", 11),
-                  command=self._open_indicators_from_journal).pack(side=tk.LEFT, padx=4)
-        tk.Button(tb, text="📚 Довідка", bg="#1a4b8c", fg="white",
-                  font=("Times New Roman", 11),
-                  command=self._show_help).pack(side=tk.LEFT, padx=4)
-        tk.Label(tb,
-                 text="Двічі клікніть на синій заголовок щоб перейменувати показник",
-                 font=("Times New Roman", 9), fg="#666"
-                 ).pack(side=tk.LEFT, padx=10)
+        sep()
+        self._related_btn = tk.Menubutton(tb, text="↔ Інші види зв'язку ▾", font=fnt, bg="#8c1a1a", fg="white", activebackground="#a33", activeforeground="white", relief=tk.RAISED, bd=2)
+        self._related_btn.pack(side=tk.LEFT, padx=3)
+        rm = tk.Menu(self._related_btn, tearoff=0)
+        rm.add_command(label="Різні типи змінних: η, r_rb, V Крамера, таблиці спряженості…", command=self._open_assoc)
+        rm.add_command(label="Генотипні й фенотипні кореляції (rG, rP, rE)…", command=self._open_gencorr)
+        rm.add_command(label="Шляховий аналіз: прямі й непрямі ефекти…", command=self._open_path)
+        self._related_btn["menu"] = rm
+        tk.Button(tb, text="📚 Довідка", bg="#1a4b8c", fg="white", font=fnt, command=self._show_help).pack(side=tk.LEFT, padx=3)
+        tk.Label(self.win, text="Подвійний клік на синьому заголовку стовпця – перейменувати показник.", font=("Times New Roman", 9), fg="#666").pack(anchor="w", padx=10)
 
     def _clear_table(self):
         if not messagebox.askyesno("Очистити таблицю",
@@ -1026,6 +1008,7 @@ class CorrelationWindow:
 
         win = tk.Toplevel(self.win)
         win.title("Кореляційний аналіз — результати")
+        win.after_idle(lambda w=win: attach_export_bar(w))                     # Word / Excel: таблиці з сіткою + графіки
         win.geometry("1100x800"); set_icon(win)
         win.resizable(True, True)
 
@@ -1174,6 +1157,11 @@ class CorrelationWindow:
         """η, бісеріальні коефіцієнти та таблиці спряженості потребують якісних ознак – окреме вікно."""
         from sad_breeding_win import AssocWindow
         AssocWindow(self.win)
+
+    def _open_path(self):
+        """Шляховий аналіз (прямі й непрямі ефекти) потребує іншої структури даних – окреме вікно."""
+        from sad_breeding_win import PathWindow
+        PathWindow(self.win)
 
     def _open_gencorr(self):
         """Генотипні й фенотипні кореляції потребують іншої структури даних (генотип × повторність × ознаки) —
@@ -1539,6 +1527,7 @@ class CorrelationWindow:
         # Віджет фігури створюємо одразу з master=main_cv, щоб коректно
         # вбудувати його через create_window нижче.
         cv = FigureCanvasTkAgg(fig, master=main_cv)
+        cv.get_tk_widget()._sad_fig = fig                  # щоб експорт звіту знайшов графік
         cv.draw()
         widget = cv.get_tk_widget()
         renderer = fig.canvas.get_renderer()

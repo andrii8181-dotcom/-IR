@@ -3,6 +3,7 @@
 from sad_common import *
 from sad_correlation import CorrelationWindow, GraphSettingsDlg
 from sad_journal_trial import open_indicator_for_anova
+from sad_report import attach_export_bar
 
 # ═══════════════════════════════════════════════════════════════
 # GUI — SADTk
@@ -1804,6 +1805,7 @@ class SADTk:
 
         # Показуємо текстовий звіт як першу вкладку
         _show_panel(rpt_frame, b_rpt)
+        attach_export_bar(rw, "Звіт ANOVA – " + str(d.get("indicator", "")))      # Word / Excel: таблиці з сіткою + графіки
 
         # Зберігаємо sidebar/content/show_panel для show_graphs
         self._rpt_sidebar = sidebar
@@ -1840,6 +1842,7 @@ class SADTk:
             gw.title(f"Графічний звіт — {indicator}")
             maximize_win(gw)
             set_icon(gw)
+            attach_export_bar(gw, f"Графічний звіт – {indicator}")
             main = tk.Frame(gw); main.pack(fill=tk.BOTH, expand=True)
             sidebar = tk.Frame(main, width=190, bg="#2c3e50")
             sidebar.pack(side=tk.LEFT, fill=tk.Y); sidebar.pack_propagate(False)
@@ -1893,6 +1896,7 @@ class SADTk:
             gw.title(f"Графічний звіт — {indicator}")
             maximize_win(gw)
             set_icon(gw)
+            attach_export_bar(gw, f"Графічний звіт – {indicator}")
             outer_f = tk.Frame(gw); outer_f.pack(fill=tk.BOTH, expand=True)
             sidebar = tk.Frame(outer_f, width=195, bg="#2c3e50")
             sidebar.pack(side=tk.LEFT, fill=tk.Y); sidebar.pack_propagate(False)
@@ -2608,85 +2612,3 @@ class SADTk:
         ok, msg = _copy_fig_to_clipboard(fig)
         if ok: messagebox.showinfo("","Графік скопійовано (PNG).\nВставте у Word через Ctrl+V.")
         else:  messagebox.showwarning("",f"Помилка: {msg}")
-
-
-
-# ═══════════════════════════════════════════════════════════════
-# EXPORT  — Word (.docx) and PDF via reportlab
-# ═══════════════════════════════════════════════════════════════
-def export_report_docx(text_lines, tables, filepath):
-    """Export plain-text + table data to .docx using python-docx."""
-    try:
-        from docx import Document
-        from docx.shared import Pt, Cm
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-    except ImportError:
-        raise RuntimeError("Встановіть python-docx:\n  pip install python-docx")
-    doc = Document()
-    style = doc.styles['Normal']; style.font.name = 'Times New Roman'; style.font.size = Pt(12)
-    for section in doc.sections:
-        section.top_margin = Cm(2); section.bottom_margin = Cm(2)
-        section.left_margin = Cm(2.5); section.right_margin = Cm(2)
-    for item in text_lines:
-        kind = item.get("kind", "text")
-        if kind == "heading":
-            p = doc.add_heading(item["text"], level=item.get("level", 2))
-            p.runs[0].font.name = 'Times New Roman'
-        elif kind == "table":
-            headers = item["headers"]; rows = item["rows"]
-            tbl = doc.add_table(rows=1 + len(rows), cols=len(headers))
-            tbl.style = 'Table Grid'
-            hrow = tbl.rows[0]
-            for j, h in enumerate(headers):
-                hrow.cells[j].text = str(h)
-                run = hrow.cells[j].paragraphs[0].runs[0]
-                run.bold = True; run.font.name = 'Times New Roman'; run.font.size = Pt(11)
-            for i, row in enumerate(rows):
-                for j, val in enumerate(row):
-                    cell = tbl.rows[i+1].cells[j]
-                    cell.text = "" if val is None else str(val)
-                    cell.paragraphs[0].runs[0].font.name = 'Times New Roman' if cell.paragraphs[0].runs else None
-            doc.add_paragraph()
-        else:
-            p = doc.add_paragraph(item.get("text", ""))
-            p.runs[0].font.name = 'Times New Roman' if p.runs else None
-    doc.save(filepath)
-
-def export_report_pdf(text_lines, filepath):
-    """Export plain text to PDF using reportlab."""
-    try:
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import cm
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-        from reportlab.lib import colors
-    except ImportError:
-        raise RuntimeError("Встановіть reportlab:\n  pip install reportlab")
-    doc = SimpleDocTemplate(filepath, pagesize=A4,
-                            rightMargin=2*cm, leftMargin=2.5*cm,
-                            topMargin=2*cm, bottomMargin=2*cm)
-    styles = getSampleStyleSheet()
-    h1 = ParagraphStyle('h1', parent=styles['Heading2'], fontName='Times-Roman', fontSize=12, spaceAfter=4)
-    normal = ParagraphStyle('n', parent=styles['Normal'], fontName='Times-Roman', fontSize=11, spaceAfter=2)
-    story = []
-    for item in text_lines:
-        kind = item.get("kind","text")
-        if kind == "heading":
-            story.append(Paragraph(item["text"], h1))
-        elif kind == "table":
-            headers = item["headers"]; rows = item["rows"]
-            data = [headers] + [[("" if v is None else str(v)) for v in r] for r in rows]
-            t = Table(data, repeatRows=1)
-            t.setStyle(TableStyle([
-                ('FONTNAME',(0,0),(-1,0),'Times-Roman'), ('FONTSIZE',(0,0),(-1,0),10),
-                ('FONTNAME',(0,1),(-1,-1),'Times-Roman'), ('FONTSIZE',(0,1),(-1,-1),9),
-                ('GRID',(0,0),(-1,-1),0.5,colors.black),
-                ('BACKGROUND',(0,0),(-1,0),colors.HexColor('#e8e8e8')),
-            ]))
-            story.append(t); story.append(Spacer(1,6))
-        else:
-            txt = item.get("text","").replace("\n","<br/>")
-            if txt.strip(): story.append(Paragraph(txt, normal))
-    doc.build(story)
-
-

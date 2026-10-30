@@ -165,6 +165,24 @@ clear(w); fill(w, [[1, 2, 3, 4, 5], [2, 1, 4, 3, 6], [5, 4, 3, 2, 1], [1, 3, 2, 
 labels_, arrays_, _ = w._collect_columns(); w._run_partial(labels_, arrays_, [2, 3], [0, 1], "pearson", 0.05, "holm")
 check(any("Замало" in m_ for _, m_ in LOG["warn"]) or any("n > k" in m_ or "потрібно" in m_ for _, m_ in LOG["warn"]), "замало спостережень для двох контрольних ознак → зрозуміла відмова без аварії")
 
+print("\n== 5б. Структура панелі й меню (без дублів)")
+def _lbls(m):
+    return [m.entrycget(i, "label") for i in range(m.index("end") + 1) if m.type(i) not in ("tearoff", "separator")]
+mbar = w.win.nametowidget(w.win.cget("menu")); top = _lbls(mbar)
+check(top == ["Файл"], f"у рядку меню лише «Файл» (меню «Правка» дублювало «Налаштування»): {top}")
+fmenu = mbar.nametowidget(mbar.entrycget(1 if mbar.type(0) == "tearoff" else 0, "menu")); fl = _lbls(fmenu)
+check(fl == ["Зберегти проект", "Відкрити проект"], f"меню «Файл»: лише проєкти {fl} (Excel – на панелі даних)")
+btxt = [b.cget("text") for b in widgets(w.win, "Button")]
+check(not any("Генотипні" in x or "Різні типи" in x for x in btxt) and sum("Частинна" in x for x in btxt) == 1, "окремих кнопок інших аналізів на панелі немає; «Частинна кореляція» одна")
+check(sum("Excel" in x for x in btxt) == 1 and any("Вставити з буфера" in x for x in btxt) and any("польового журналу" in x for x in btxt), "джерела даних зібрано разом: буфер, Excel, польовий журнал – по одній кнопці")
+tl_ = [x.cget("text") for x in widgets(w.win, "Label")]; check("Аналіз:" in tl_ and "Дані:" in tl_, "панель розділена на групи «Аналіз:» і «Дані:»")
+tmenu = w._settings_btn.nametowidget(w._settings_btn.cget("menu")); tlab = _lbls(tmenu)
+check(w._settings_btn.cget("text") == "⚙ Таблиця ▾" and len(tlab) == 5 and any("Очистити" in x for x in tlab), f"меню «Таблиця»: {tlab}")
+check(len(widgets(w.win, "TSeparator")) >= 2, "групи розділено роздільниками")
+mx_ = w._related_btn.nametowidget(w._related_btn.cget("menu")); pl_ = _lbls(mx_)
+mx_.invoke([i for i, x in enumerate(pl_) if "Шляховий" in x][0]); root.update(); pw_ = find_win("Шлях")
+check(pw_ is not None, "пункт «Шляховий аналіз» відкриває вікно шляхового аналізу"); pw_ and pw_.destroy()
+
 print("\n== 6. Генотипні кореляції: кнопка, меню, вікно")
 labels_all = []
 def _rl(x):
@@ -173,11 +191,11 @@ def _rl(x):
     except Exception: pass
     for c in x.winfo_children(): _rl(c)
 _rl(root); check(any("Генотипні кореляції" in s for s in labels_all), "пункт «Генотипні кореляції» є в меню розділу «Зв'язок змінних»")
-btn_g = [b for b in widgets(w.win, "Button") if "Генотипні кореляції" in b.cget("text")]
-check(len(btn_g) == 1, "у вікні кореляції є кнопка «Генотипні кореляції»")
-btn_g[0].invoke(); root.update()
+rmenu = w._related_btn.nametowidget(w._related_btn.cget("menu")); rlabels = _lbls(rmenu)
+check(len(rlabels) == 3 and any("Генотипні" in x for x in rlabels), f"у списку «Інші види зв'язку» є генотипні кореляції: {[x[:28] for x in rlabels]}")
+rmenu.invoke([i for i, x in enumerate(rlabels) if "Генотипні" in x][0]); root.update()
 gw = find_win("Генотипні й фенотипні кореляції (rG, rP)")
-check(gw is not None, "кнопка відкриває вікно введення (генотип × повторність × ознаки)")
+check(gw is not None, "пункт списку відкриває вікно введення (генотип × повторність × ознаки)")
 import sad_breeding_win as BW
 gc = BW.GenCorrWindow(root); root.update()
 check(gc.header_names()[:3] == ["Генотип", "Повторність", "Ознака 1"], "заголовки за замовчуванням")
@@ -216,9 +234,8 @@ gc2.win.destroy()
 print("\n== 7. Зв'язок змінних різних типів: меню, кнопка, три режими")
 labels_all = []
 _rl(root); check(any("Зв'язок різних типів змінних" in s for s in labels_all), "пункт «Зв'язок різних типів змінних» є в меню розділу «Зв'язок змінних»")
-bt = [b for b in widgets(w.win, "Button") if "Різні типи змінних" in b.cget("text")]
-check(len(bt) == 1, "у вікні кореляції є кнопка «Різні типи змінних»")
-bt[0].invoke(); root.update(); aw0 = find_win("Зв'язок змінних різних типів"); check(aw0 is not None, "кнопка відкриває вікно")
+check(any("Різні типи змінних" in x for x in rlabels), "у списку «Інші види зв'язку» є «Різні типи змінних»")
+rmenu.invoke([i for i, x in enumerate(rlabels) if "Різні типи" in x][0]); root.update(); aw0 = find_win("Зв'язок змінних різних типів"); check(aw0 is not None, "пункт списку відкриває вікно")
 import sad_breeding_win as BW
 aw = BW.AssocWindow(root); root.update()
 check(aw.header_names()[:2] == ["Група", "Значення"], "режим η: заголовки «Група», «Значення»")

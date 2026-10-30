@@ -24,7 +24,7 @@ def legend_text(f): return " | ".join(t.get_text() for a in f.axes if a.get_lege
 print("== 1. Усі діаграми й легенди")
 for kind, title in CH.CHARTS:
     f, r = build(kind)
-    if kind in ("vine", "spi"): check(r is not None and len(f.axes) == 1, f"«{title}» без широти / без SPI повертає пояснення замість діаграми: «{r[:60]}…»")
+    if kind in ("vine", "spi", "humidity"): check(r is not None and len(f.axes) == 1, f"«{title}» без широти / без SPI повертає пояснення замість діаграми: «{r[:60]}…»")
     else: check(r is None and len(f.axes) >= 1, f"«{title}» будується")
 f, _ = build("climo_decade"); lt = legend_text(f)
 check("Середня температура" in lt and "крива" in lt and "ліва вісь" in lt and "Сума опадів" in lt and "стовпчики" in lt and "права вісь" in lt, f"декади: легенда пояснює, що крива – температура, стовпчики – опади: «{lt}»")
@@ -129,6 +129,31 @@ check(png_def[:4] == b"\x89PNG" and b[0] < a[0] and b[1] < a[1], f"діагра�
 f, r = build("years_cmp"); ys = rep["years"]; rep_empty = dict(rep); rep_empty["years"] = []
 f2 = Figure(); res = CH.build_chart(f2, "years_cmp", rep_empty, "м. Умань"); check(res and "розділі 3" in res, "порожнє порівняння років: повідомлення вказує на розділ 3 (роки й вікно)")
 shutil.rmtree(tmp, ignore_errors=True)
+print("\n== 7. Вологість повітря")
+f, r = build("humidity"); check(r is not None and "немає вологості повітря" in r and "RH2M" in r and len(f.axes) == 1, f"без вологості: пояснення з назвою параметра NASA «{r[:70]}…»")
+_dd = [dt.date(2022, 1, 1) + dt.timedelta(days=k) for k in range(730)]; _dy = np.array([x.timetuple().tm_yday for x in _dd], float); _tt = 10 + 12 * np.sin(2 * np.pi * (_dy - 110) / 365); _rr = np.clip(66 + 22 * np.cos(2 * np.pi * (_dy - 15) / 365), 15, 100)
+rep_h = W.build_report(W.DailySeries(_dd, {"tmean": _tt, "tmax": _tt + 5, "tmin": _tt - 5, "prec": np.full(730, 1.0), "rh": _rr}), W.default_settings())
+def buildh(style=None):
+    ff = Figure(dpi=100); rr_ = CH.build_chart(ff, "humidity", rep_h, "м. Умань", style); return ff, rr_
+f, r = buildh(); check(r is None and len(f.axes) == 3, f"з вологістю будується: {len(f.axes)} осі (вологість, лічильники діб, VPD)")
+bars = [p.get_height() for p in f.axes[0].patches]; mo = [m["rh"] for m in rep_h["months"]]
+check(len(bars) == 24 and np.allclose(bars, mo), "стовпчики = середня вологість кожного з 24 місяців")
+vp = f.axes[2].lines[0].get_ydata(); check(np.allclose(vp, [m["vpd"] for m in rep_h["months"]]), "лінія VPD = середній VPD місяців")
+hl = sorted(round(float(l.get_ydata()[0])) for l in f.axes[0].lines if len(set(l.get_ydata())) == 1); check(hl == [30, 80], "на графіку пунктирні межі 30 % і 80 %")
+b3 = [p.get_height() for p in f.axes[1].patches]; check(len(b3) == 48 and sum(b3[:24]) == sum(m["days_rh_hi"] for m in rep_h["months"]) and sum(b3[24:]) == sum(m["days_rh_lo"] for m in rep_h["months"]), "нижня панель: діб ≥80 % і ≤30 % за місяцями (суми збігаються)")
+_ymax = max(p.get_height() for p in f.axes[1].patches); check(f.axes[1].get_ylim()[1] >= _ymax * 1.3, f"нижня панель має запас по висоті для легенди (межа {f.axes[1].get_ylim()[1]:.1f} при максимумі {_ymax:.0f})")
+lt = legend_text(f); check("Вологість повітря" in lt and "VPD" in lt and "≥ 80 %" in lt and "≤ 30 %" in lt, f"легенда: {lt[:90]}")
+check(len(f.axes[1].get_xticklabels()) == 24 and f.axes[1].get_xticklabels()[0].get_text() == rep_h["months"][0]["label"], "підписи місяців на осі X")
+f, _ = buildh({"colors": {"humidity": {"rh": "#00aa00", "vpd": "#aa00aa", "hi": "#0000cc"}}})
+check(any(mc.same_color(p.get_facecolor()[:3], "#00aa00") for p in f.axes[0].patches) and mc.same_color(f.axes[2].lines[0].get_color(), "#aa00aa") and any(mc.same_color(p.get_facecolor()[:3], "#0000cc") for p in f.axes[1].patches), "кольори складових змінюються зі стилем користувача")
+check([c[0] for c in CH.components("humidity")] == ["rh", "vpd", "hi", "lo", "thr"], "перелік складових для налаштування кольорів")
+f, _ = buildh({"titles": {"humidity": "Мій заголовок"}}); check(f.axes[0].get_title(loc="left").startswith("Мій заголовок\n"), "власний заголовок для діаграми вологості")
+rep_one = W.build_report(W.DailySeries(_dd[:20], {"tmean": _tt[:20], "tmax": _tt[:20] + 5, "tmin": _tt[:20] - 5, "prec": np.zeros(20), "rh": _rr[:20]}), W.default_settings()); f1 = Figure(); r1 = CH.build_chart(f1, "humidity", rep_one, "x")
+check(r1 is None and len([p for p in f1.axes[0].patches]) == 1, "один місяць даних – діаграма з одним стовпчиком")
+_rr2 = _rr.copy(); _rr2[:365] = np.nan; rep_g = W.build_report(W.DailySeries(_dd, {"tmean": _tt, "tmax": _tt + 5, "tmin": _tt - 5, "prec": np.full(730, 1.0), "rh": _rr2}), W.default_settings()); fg = Figure(); rg_ = CH.build_chart(fg, "humidity", rep_g, "x")
+check(rg_ is None and len(fg.axes[0].patches) == 12, "місяці без жодного значення вологості пропускаються (12 із 24)")
+import io as _io; _b = _io.BytesIO(); f.savefig(_b, format="png", dpi=80); check(_b.getvalue()[:4] == b"\x89PNG" and len(_b.getvalue()) > 5000, "діаграму можна зберегти як зображення")
+
 print("\n" + "=" * 56)
 if FAIL: print(f"ПРОВАЛІВ: {len(FAIL)}"); [print("  -", f_) for f_ in FAIL]; sys.exit(1)
 print("УСІ ПЕРЕВІРКИ ДІАГРАМ ПРОЙДЕНО")

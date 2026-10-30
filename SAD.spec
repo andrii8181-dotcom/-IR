@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller: pyinstaller SAD.spec --noconfirm --clean       (результат: dist/SAD/SAD.exe + тека _internal)
 import glob, os, sys
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 here = os.path.abspath(SPECPATH)
 
@@ -19,6 +19,8 @@ _map = os.path.join(here, "sad_worldmap.npz")
 if not os.path.exists(_map):
     raise SystemExit("Не знайдено sad_worldmap.npz (карта світу) – покладіть його поруч із main.py або згенеруйте: python tools/build_worldmap_data.py")
 datas.append((_map, "."))
+# python-docx шукає шаблони (колонтитули тощо) за шляхом docx/parts/../templates: .py-файли пакета додаємо як дані, щоб тека parts існувала фізично
+datas += collect_data_files("docx", include_py_files=True)
 icon = os.path.join(here, "icon.ico")
 icon = icon if (sys.platform == "win32" and os.path.exists(icon)) else None
 

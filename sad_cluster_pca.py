@@ -614,6 +614,7 @@ class ClusterWindow:
         # ── Вікно результатів ──────────────────────────────────
         win = tk.Toplevel(self.win)
         win.title("Кластерний аналіз — Результати")
+        win.after_idle(lambda w=win: attach_export_bar(w))                     # Word / Excel: таблиці з сіткою + графіки
         win.geometry("1150x800"); set_icon(win)
 
         # Toolbar результатів (фіксовано зверху)
@@ -1166,6 +1167,7 @@ PCA — ПОКРОКОВА ІНСТРУКЦІЯ
                           eigenvectors, explained, scores, n_comp, min_c):
         win = tk.Toplevel(self.win)
         win.title("PCA — Результати")
+        win.after_idle(lambda w=win: attach_export_bar(w))                     # Word / Excel: таблиці з сіткою + графіки
         win.geometry("1200x860"); set_icon(win)
         self._pca_win = win
 

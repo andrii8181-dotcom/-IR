@@ -65,6 +65,11 @@ def _opt_cols(rep, base_cols, full_only=True):
         cols.append(("ET₀, мм", lambda r: r["et0_sum"], 0, "num", False))
         cols.append(("P/ET₀", lambda r: r.get("ai", float("nan")), 2, "num", False))
     if s.has("rad"): cols.append(("Радіація, МДж/м²", lambda r: r["rad_sum"], 0, "num", False))
+    if s.has("rh"):
+        cols.append(("Вологість, %", lambda r: r["rh"], 0, "num", True))                       # у компактному (Word) наборі – середня вологість і VPD
+        cols.append((f"Діб RH ≥{W.RH_HI:g} %", lambda r: r["days_rh_hi"], 0, "num", False))
+        cols.append((f"Діб RH ≤{W.RH_LO:g} %", lambda r: r["days_rh_lo"], 0, "num", False))
+        cols.append(("VPD, кПа", lambda r: r["vpd"], 2, "num", True))
     return cols
 
 
@@ -91,7 +96,10 @@ def spec_total(rep):
         ("ГТК Селянінова за період", t["htc"], 2),
         ("Умови зволоження за ГТК", htc_label(t["htc"]), None),
     ]
-    if s.has("rh"): rows.insert(7, ("Відносна вологість повітря, %", t["rh"], 0))
+    if s.has("rh"):
+        rows.insert(7, ("Відносна вологість повітря, %", t["rh"], 0))
+        rows.insert(8, (f"Діб з вологістю ≥ {W.RH_HI:g} % / ≤ {W.RH_LO:g} %", f"{t['days_rh_hi']} / {t['days_rh_lo']}", None))
+        rows.insert(9, ("Середній дефіцит насичення повітря (VPD), кПа", t["vpd"], 2))
     if s.has("wind"): rows.append(("Середня швидкість вітру, м/с", t["wind"], 1))
     if s.has("rad"): rows.append(("Сумарна сонячна радіація, МДж/м²", t["rad_sum"], 0))
     if s.has("et0"):
@@ -172,6 +180,8 @@ def spec_periods(rep):
         ("Діб із заморозком", lambda r: r.get("days_frost"), 0, "num", False),
         ("ГТК", lambda r: r.get("htc"), 2, "htc", False),
     ]
+    if rep["series"].has("rh"):
+        cols += [("Вологість, %", lambda r: r.get("rh"), 0, "num", True), ("VPD, кПа", lambda r: r.get("vpd"), 2, "num", True)]
     return {"key": "periods", "title": "Метеорологічні умови за періодами користувача",
             "kind": "table", "cols": cols, "rows": rep["periods"]}
 
@@ -499,7 +509,8 @@ def export_xlsx(path, rep, meta_rows, pub_text, comma_unused=None):
         names = {"tmean": "Середня температура, °C", "tmax_mean": "Середня tmax, °C", "tmin_mean": "Середня tmin, °C",
                  "prec_sum": "Сума опадів, мм", "sat_5": "САТ >5 °C", "sat_10": "САТ >10 °C", "sat_15": "САТ >15 °C",
                  "set": "СЕТ", "htc": "ГТК", "rad_sum": "Радіація, МДж/м²", "et0_sum": "ET₀, мм",
-                 "days_frost": "Діб із заморозком", "days_tmax30": "Діб tmax ≥30 °C"}
+                 "days_frost": "Діб із заморозком", "days_tmax30": "Діб tmax ≥30 °C",
+                 "rh": "Вологість повітря, %", "days_rh_hi": f"Діб RH ≥{W.RH_HI:g} %", "days_rh_lo": f"Діб RH ≤{W.RH_LO:g} %", "vpd": "VPD, кПа"}
         for k, nme in names.items():
             v, sd = nd_.get(k), nd_.get(k + "_sd")
             if v is None or (isinstance(v, float) and math.isnan(v)): continue

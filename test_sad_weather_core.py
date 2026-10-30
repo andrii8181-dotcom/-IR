@@ -394,6 +394,40 @@ check(abs(rw["periods"][0]["ai"] - rw["periods"][0]["prec_sum"] / rw["periods"][
 rsp = W.build_report(s17, st1, spi={"rows": [], "scales": [1]}); check(rsp["spi"] == {"rows": [], "scales": [1]} and r1["spi"] is None, "SPI передається у звіт без змін; за замовчуванням None")
 ws17 = W.weather_set(r1, "тест"); check("ai" in ws17["years"]["2022"] and any(i["key"] == "ai" for i in ws17["indicators"]), "погодний набір для аналізів містить P/ET₀")
 
+print("\n== 18. Вологість повітря: RH, діб із високою / низькою, VPD")
+import sad_weather_indices as _WI
+d_ = [dt.date(2024, 7, 1) + dt.timedelta(days=k) for k in range(6)]
+rh_ = np.array([95.0, 80.0, 79.9, 30.0, 30.1, 10.0]); tx_ = np.array([30.0, 28.0, 26.0, 32.0, 25.0, 35.0]); tn_ = tx_ - 12.0; tm_ = (tx_ + tn_) / 2
+sh = W.DailySeries(d_, {"tmean": tm_, "tmax": tx_, "tmin": tn_, "prec": np.zeros(6), "rh": rh_}); ps = W.period_stats(sh)
+check(abs(ps["rh"] - rh_.mean()) < 1e-12, f"середня вологість = {ps['rh']:.3f} (ручна {rh_.mean():.3f})")
+check(ps["days_rh_hi"] == 2 and ps["days_rh_lo"] == 2, "діб ≥ 80 %: 2 (95; 80 – межа включена); діб ≤ 30 %: 2 (30 – межа включена; 10)")
+es_ = (0.6108 * np.exp(17.27 * tx_ / (tx_ + 237.3)) + 0.6108 * np.exp(17.27 * tn_ / (tn_ + 237.3))) / 2
+check(abs(ps["vpd"] - np.mean(es_ * (1 - rh_ / 100))) < 1e-12, f"VPD = es·(1 − RH/100), середнє {ps['vpd']:.4f} кПа (ручний розрахунок FAO-56)")
+check(abs(_WI.vpd_daily(np.array([20.0]), np.array([10.0]), np.array([100.0]))[0]) < 1e-12 and _WI.vpd_daily(np.array([20.0]), np.array([10.0]), np.array([0.0]))[0] > 1.5, "VPD = 0 при 100 %; при 0 % дорівнює es")
+check(np.allclose(_WI.vpd_daily(None, None, np.array([50.0]), np.array([20.0])), 0.6108 * np.exp(17.27 * 20 / 257.3) * 0.5), "без tmax/tmin: es за середньою температурою")
+check(np.isnan(_WI.vpd_daily(None, None, np.array([50.0]))[0]), "без жодної температури – NaN")
+check(_WI.vpd_daily(np.array([20.0]), np.array([10.0]), np.array([120.0]))[0] == 0.0, "вологість понад 100 % обмежується (VPD не від'ємний)")
+sn = W.DailySeries(d_, {"tmean": tm_, "tmax": tx_, "tmin": tn_, "prec": np.zeros(6)}); pn = W.period_stats(sn)
+check(math.isnan(pn["rh"]) and math.isnan(pn["vpd"]) and math.isnan(pn["days_rh_hi"]) and math.isnan(pn["days_rh_lo"]) and pn["miss_rh"] == 1.0, "без вологості: показники NaN (не нулі), частка пропусків = 100 %")
+rh2 = rh_.copy(); rh2[:2] = np.nan; pp = W.period_stats(W.DailySeries(d_, {"tmean": tm_, "tmax": tx_, "tmin": tn_, "prec": np.zeros(6), "rh": rh2}))
+check(abs(pp["rh"] - np.nanmean(rh2)) < 1e-12 and pp["days_rh_hi"] == 0 and pp["days_rh_lo"] == 2 and abs(pp["miss_rh"] - 2 / 6) < 1e-12, "пропуски вологості не рахуються: середнє й лічильники лише за наявними добами")
+check(W.RH_HI == 80.0 and W.RH_LO == 30.0, "пороги за замовчуванням 80 % і 30 %")
+keys_ = [k for k, _, _ in W.INDICATOR_DEFS]; check(len(keys_) == 19 and all(k in keys_ for k in ("rh", "days_rh_hi", "days_rh_lo", "vpd")), "у переліку показників 19 пунктів, вологість і VPD серед них")
+check([u for k, l, u in W.INDICATOR_DEFS if k == "vpd"] == ["кПа"] and "≥ 80 %" in [l for k, l, u in W.INDICATOR_DEFS if k == "days_rh_hi"][0], "одиниці й підписи")
+nn = 366 * 2 + 365 * 2; d2_ = [dt.date(2021, 1, 1) + dt.timedelta(days=k) for k in range(365 * 3)]; dy_ = np.array([x.timetuple().tm_yday for x in d2_], float)
+rh3 = 60 + 20 * np.cos(2 * np.pi * (dy_ - 10) / 365); t3 = 10 + 12 * np.sin(2 * np.pi * (dy_ - 110) / 365)
+s3 = W.DailySeries(d2_, {"tmean": t3, "tmax": t3 + 5, "tmin": t3 - 5, "prec": np.full(len(d2_), 1.0), "rh": rh3}); st3 = W.default_settings(); st3["window"] = (1, 1, 12, 31)
+rp = W.build_report(s3, st3)
+check(len(rp["years"]) == 3 and all(abs(r["rh"] - rh3[i * 365:(i + 1) * 365].mean()) < 1e-9 for i, r in enumerate(rp["years"])), "у таблиці за роками середня вологість кожного року збігається з ручною")
+check(len(rp["months"]) == 36 and all("vpd" in r and "days_rh_hi" in r for r in rp["months"]) and all("vpd" in r for r in rp["decades"]), "місяці й декади мають показники вологості")
+ws_ = W.weather_set(rp, "Умань"); check("vpd" in ws_["years"]["2021"] and ws_["years"]["2021"]["rh"] is not None and any(i["key"] == "days_rh_hi" for i in ws_["indicators"]), "погодний набір для аналізів містить вологість і VPD")
+nd_, yrs_ = W.normal_from_years({y: s3.slice(dt.date(y, 1, 1), dt.date(y, 12, 31)) for y in (2021, 2022, 2023)}); check(abs(nd_["rh"] - rh3.mean()) < 0.5 and "vpd_sd" in nd_ and "days_rh_hi" in nd_, "норма за роками містить вологість, VPD і SD")
+rp0 = W.build_report(W.DailySeries(d2_, {"tmean": t3, "tmax": t3 + 5, "tmin": t3 - 5, "prec": np.full(len(d2_), 1.0)}), st3); ws0 = W.weather_set(rp0)
+check(ws0["years"]["2021"]["rh"] is None and ws0["years"]["2021"]["vpd"] is None and ws0["years"]["2021"]["days_rh_hi"] is None, "без вологості в погодному наборі – «немає даних» (None), а не нулі")
+nas = {"properties": {"parameter": {"T2M": {"20240701": 20.0, "20240702": 21.0}, "RH2M": {"20240701": 80.5, "20240702": -999.0}}}, "header": {"fill_value": -999}, "parameters": {"RH2M": {"units": "%"}, "T2M": {"units": "C"}}}
+sr_ = W.parse_nasa(nas); check(sr_.has("rh") and abs(sr_.get("rh")[0] - 80.5) < 1e-12 and math.isnan(sr_.get("rh")[1]), "NASA POWER: RH2M розпізнається, -999 → NaN")
+check("RH2M" in W.nasa_url(48.7, 30.2, dt.date(2024, 7, 1), dt.date(2024, 7, 2)), "у запит до NASA включено RH2M")
+
 print("\n" + "=" * 56)
 if FAIL:
     print(f"ПРОВАЛІВ: {len(FAIL)}")

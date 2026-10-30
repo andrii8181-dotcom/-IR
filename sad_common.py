@@ -184,6 +184,7 @@ def embed_figure(fig, master, dpi=96):
     """Вставляє matplotlib Figure у tkinter frame."""
     cv = FigureCanvasTkAgg(fig, master=master)
     widget = cv.get_tk_widget()
+    widget._sad_fig = fig                      # щоб експорт звіту (sad_report) знайшов графік у вікні
     widget.pack(fill=tk.BOTH, expand=True)
     cv.draw()
     return cv
@@ -209,6 +210,7 @@ def embed_figure_scrollable(fig, master, dpi=96):
 
     cv = FigureCanvasTkAgg(fig, master=cv_container)
     widget = cv.get_tk_widget()
+    widget._sad_fig = fig                      # щоб експорт звіту (sad_report) знайшов графік у вікні
     cv.draw()
 
     win_id = cv_container.create_window((0, 0), window=widget, anchor="nw")
@@ -1347,5 +1349,7 @@ DEF_GS = {
     "heatmap_cmap": "RdYlGn", "heatmap_font_size": 10, "heatmap_annot_color": "#000000",
 }
 
+
+from sad_report import attach_export_bar, export_window       # експорт звіту у Word/Excel (смужка у вікні результатів)
 
 __all__ = [_n for _n in dir() if not _n.startswith('__')]

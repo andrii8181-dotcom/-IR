@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 from sad_common import *
 from sad_journal_trial import open_indicators_for_variant_analysis
+from sad_descriptive_ttest import detect_outliers_grubbs      # використовується у показі результатів (раніше не імпортувався)
 
 class RegressionWindow:
     MODELS = ["Лінійна:  y = a + bx",
@@ -195,6 +196,7 @@ class RegressionWindow:
         self._res_cv.pack(fill=tk.BOTH, expand=True)
         _vsb.config(command=self._res_cv.yview)
         self.res_frame = tk.Frame(self._res_cv)
+        self.win.after_idle(lambda: attach_export_bar(self.win, "Регресійний аналіз", roots=[self.res_frame]))
         _wid = self._res_cv.create_window((0,0), window=self.res_frame, anchor="nw")
         self.res_frame.bind("<Configure>",
             lambda e: self._res_cv.configure(scrollregion=self._res_cv.bbox("all")))

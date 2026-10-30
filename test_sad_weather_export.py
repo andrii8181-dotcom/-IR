@@ -209,6 +209,36 @@ gv_ = synth_full(dt.date(2021, 1, 1), dt.date(2022, 12, 31)); data_ = dict(gv_.d
 rg_ = W.build_report(gv2, stf); check(rg_["intl"]["pet_method"] == "given" and np.allclose(rg_["series"].get("et0"), 3.0) and abs(rg_["total"]["et0_sum"] - 3.0 * len(gv2)) < 1e-6, "якщо ET₀ є в даних користувача, програма її не замінює власним розрахунком")
 
 shutil.rmtree(tmp, ignore_errors=True)
+print("\n== Х. Вологість повітря у таблицях, Word і Excel")
+import numpy as _np, datetime as _dtm, openpyxl as _oxl
+_d = [_dtm.date(2022, 1, 1) + _dtm.timedelta(days=k) for k in range(365 * 2)]; _doy = _np.array([x.timetuple().tm_yday for x in _d], float)
+_t = 10 + 12 * _np.sin(2 * _np.pi * (_doy - 110) / 365); _rh = _np.clip(65 + 20 * _np.cos(2 * _np.pi * (_doy - 10) / 365), 20, 100)
+_sh = W.DailySeries(_d, {"tmean": _t, "tmax": _t + 5, "tmin": _t - 5, "prec": _np.full(len(_d), 1.0), "rh": _rh}); _sn = W.DailySeries(_d, {"tmean": _t, "tmax": _t + 5, "tmin": _t - 5, "prec": _np.full(len(_d), 1.0)})
+_st = W.default_settings(); _st["window"] = (1, 1, 12, 31)
+_rh_rep = W.build_report(_sh, _st); _no_rep = W.build_report(_sn, _st)
+def _heads(rep, key): return [c[0] for c in [sp for sp in X.all_specs(rep) if sp["key"] == key][0]["cols"]]
+for key in ("decades", "months", "years"):
+    hh = _heads(_rh_rep, key); check(all(any(x in h for h in hh) for x in ("Вологість, %", "Діб RH ≥80 %", "Діб RH ≤30 %", "VPD, кПа")), f"таблиця «{key}»: колонки вологості є")
+    hn = _heads(_no_rep, key); check(not any("RH" in h or "VPD" in h or "Вологість" in h for h in hn), f"таблиця «{key}» без вологості в даних: колонок вологості немає")
+check(len(_heads(_rh_rep, "months")) == len(_heads(_no_rep, "months")) + 4, "для вологості додається рівно 4 колонки")
+sp_m = [sp for sp in X.all_specs(_rh_rep) if sp["key"] == "months"][0]; strs = X.to_strings(sp_m, True) if hasattr(X, "to_strings") else None
+hh = [c[0] for c in sp_m["cols"]]; j = hh.index("Вологість, %"); jv = hh.index("VPD, кПа")
+check(abs(float(sp_m["cols"][j][1](_rh_rep["months"][0])) - _rh[:31].mean()) < 1e-9 and abs(float(sp_m["cols"][jv][1](_rh_rep["months"][0])) - _rh_rep["months"][0]["vpd"]) < 1e-12, "значення колонок = середня вологість січня 2022 і VPD із звіту")
+_tot = [r for r in X.all_specs(_rh_rep) if r["key"] == "total"][0]; stxt = " | ".join(str(r[0]) for r in _tot["rows"])
+check("дефіцит насичення" in stxt.lower() and "≥ 80 %" in stxt and "Відносна вологість" in stxt, "підсумок: рядки про вологість, дефіцит насичення й кількість діб")
+_tot0 = [r for r in X.all_specs(_no_rep) if r["key"] == "total"][0]; check(not any("насичення" in str(r[0]) or "Відносна вологість" in str(r[0]) for r in _tot0["rows"]), "підсумок без вологості: цих рядків немає")
+_per = W.build_report(_sh, _st, periods=[("Весна", _dtm.date(2022, 3, 1), _dtm.date(2022, 5, 31))]); ph = _heads(_per, "periods"); check("VPD, кПа" in ph and "Вологість, %" in ph, "таблиця періодів: вологість і VPD")
+import tempfile as _tf, os as _os
+_meta = X.make_meta(_rh_rep, "Умань", 48.7484, 30.2218, "nasa"); _pub = X.publication_text(_rh_rep, "Умань", 48.7484, 30.2218, "nasa"); _dir = _tf.mkdtemp()
+_p = _os.path.join(_dir, "h.xlsx"); X.export_xlsx(_p, _rh_rep, _meta, _pub); _wb = _oxl.load_workbook(_p)
+_ws_m = [ws for ws in _wb.worksheets if "Місяц" in ws.title][0]; _hdr = [c.value for c in _ws_m[1]] if _ws_m.max_row > 1 else []
+_hdr_all = [str(c.value) for r in _ws_m.iter_rows(min_row=1, max_row=3) for c in r if c.value is not None]
+check(any("VPD" in h for h in _hdr_all) and any("Вологість" in h for h in _hdr_all), "Excel: аркуш місяців містить колонки вологості й VPD")
+_row = [r for r in _ws_m.iter_rows(values_only=True) if r and any(isinstance(v, (int, float)) for v in r)][0]; check(any(isinstance(v, (int, float)) and abs(v - _rh[:31].mean()) < 0.6 for v in _row), "Excel: число середньої вологості січня записано числом")
+_pd = _os.path.join(_dir, "h.docx"); X.export_docx(_pd, _rh_rep, _meta, _pub, [], comma=True)
+import docx as _dx; _dd = _dx.Document(_pd); _all = " ".join(c.text for t_ in _dd.tables for r in t_.rows for c in r.cells); check("VPD" in _all and "Вологість" in _all, "Word: таблиці містять колонки вологості й VPD")
+
+
 print("\n" + "=" * 56)
 if FAIL:
     print(f"ПРОВАЛІВ: {len(FAIL)}")

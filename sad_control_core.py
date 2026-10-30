@@ -67,15 +67,19 @@ def _cdf_onefactor(lam, df, c, alternative):
     """P(max_j T_j < c) (одностороннє) чи P(max_j |T_j| < c) (двобічне) для t з однофакторною кореляцією."""
     from scipy.special import ndtr
     s, gw = _s_nodes(df)
-    sq = np.sqrt(1.0 - lam ** 2)
+    # однакові λ (типово: однакова кількість спостережень у номерів) дають однакові множники – групуємо їх і підносимо до степеня;
+    # результат той самий, а для сотень номерів обчислення в десятки разів швидше
+    lam_u, cnt = np.unique(np.asarray(lam, float), return_counts=True); cnt = cnt.astype(float)
+    sq = np.sqrt(1.0 - lam_u ** 2)
     total = 0.0
     for zi, zw in zip(_zx, _zw):
-        up = ndtr((c * s[:, None] - lam[None, :] * zi) / sq[None, :])
+        up = ndtr((c * s[:, None] - lam_u[None, :] * zi) / sq[None, :])
         if alternative == "two-sided":
-            lo = ndtr((-c * s[:, None] - lam[None, :] * zi) / sq[None, :])
-            prod = np.prod(np.clip(up - lo, 1e-300, 1.0), axis=1)
+            lo = ndtr((-c * s[:, None] - lam_u[None, :] * zi) / sq[None, :])
+            term = np.clip(up - lo, 1e-300, 1.0)
         else:
-            prod = np.prod(np.clip(up, 1e-300, 1.0), axis=1)
+            term = np.clip(up, 1e-300, 1.0)
+        prod = np.exp(np.log(term) @ cnt)
         total += zw * float(np.dot(gw, prod))
     return min(max(total, 0.0), 1.0)
 

@@ -595,6 +595,7 @@ class RepeatedMeasuresWindow:
 
         win = tk.Toplevel(self.win)
         win.title("Повторні виміри — Результати")
+        win.after_idle(lambda w=win: attach_export_bar(w))                     # Word / Excel: таблиці з сіткою + графіки
         win.geometry("1020x760"); set_icon(win)
 
         tb = tk.Frame(win, padx=6, pady=5); tb.pack(fill=tk.X)
@@ -1588,6 +1589,7 @@ class MixedRepeatedWindow:
 
         win = tk.Toplevel(self.win)
         win.title("Змішаний Repeated Measures — Результати")
+        win.after_idle(lambda w=win: attach_export_bar(w))                     # Word / Excel: таблиці з сіткою + графіки
         win.geometry("1160x820"); set_icon(win)
 
         # Toolbar

@@ -14,6 +14,14 @@ import itertools, re
 # ═══════════════════════════════════════════════════════════════
 FACTOR_LETTERS = "ABCDEFGHIJ"
 
+def _pl(n, one, few, many):
+    """Українське відмінювання за числом: 1 ділянка, 2–4 ділянки, 5–20 ділянок, 21 ділянка …"""
+    n = abs(int(n))
+    if 11 <= n % 100 <= 14: return many
+    r = n % 10
+    return one if r == 1 else (few if 2 <= r <= 4 else many)
+
+
 class SchemeConstructorWindow(HPResultsViewMixin):
     """
     Окремий інструмент від «Планування за однорідністю» — той алгоритм
@@ -78,6 +86,41 @@ class SchemeConstructorWindow(HPResultsViewMixin):
 КРОК 5. ЗБЕРЕЖЕННЯ
   «💾 Зберегти схему» — той самий формат .sadp, що й у плануванні за
   однорідністю. Відкривається так само в польовому журналі.
+
+QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для ділянок…» у Кроці 4)
+  Коли дослідів багато, легко сплутати ділянки. Програма створює табличку
+  з QR-кодом для кожної ділянки (повторність × варіант; у моделі «за
+  рослинами» – група рослин одного варіанта в повторності). Телефоном
+  відскануйте код біля ділянки – камера покаже дослід, повторність, варіант
+  (рівні факторів) і місце ділянки. Пізніше польовий журнал за цим кодом
+  одразу знатиме, до якої частини досліду вносити значення (формат –
+  у файлі QR_FORMAT.md).
+  Як розмістити без помилок:
+    • код досліду на кожній табличці й у QR – таблички різних дослідів
+      не сплутаються; підпис схеми – не сплутаються версії схеми;
+    • наскрізний номер ділянки «№ 12 з 24» і людський код на кшталт
+      K7M2-012-X: останній символ контрольний (виявляє помилку введення);
+    • колір смуги вгорі = варіант; номери сусідніх ділянок ліворуч і праворуч;
+    • «Розкладка» (PDF): інструкція, КАРТА з номерами й кольорами та
+      ЧЕК-ЛИСТ «встановлено / перевірено скануванням»;
+    • «Початок схеми» – де на місцевості ряд 1, місце 1 (друкується на карті).
+  Розміри табличок: мала 63,5×38,1 мм (21 на аркуші), середня 99×68 мм
+  (8 на аркуші, QR із повним описом), велика 100×141 мм (4 на аркуші).
+  Принтер етикеток (рулон; Xprinter, TSC, Godex, Zebra тощо): оберіть
+  «Рулон …» (40×30 … 100×150 мм) або «Рулон – свій розмір…». PDF містить
+  одну етикетку на сторінці точно її розміру; QR підігнано під сітку точок
+  принтера (203 чи 300 dpi), чорно-білий режим прибирає кольорові й сірі
+  заливки. У драйвері задайте той самий розмір етикетки й проміжок 2–3 мм,
+  друкуйте у масштабі 100 %. Етикетки прямого термодруку (без стрічки)
+  темніють на сонці й від тепла – для поля краще термотрансферний друк
+  на поліпропіленових етикетках або захисний чохол чи ламінування.
+  Зберегти можна PDF табличок (на наклейковий чи звичайний папір), PDF
+  розкладки, PNG кожної таблички, список в Excel, маніфест (JSON) для
+  польового журналу або все разом у теку; кнопка «Друкувати» відкриває
+  PDF для друку. Порада: друкуйте на водостійкому матеріалі або ламінуйте
+  й не зменшуйте код під час друку (масштаб 100 %).
+  Код досліду зберігається у файлі схеми: після повторного відкриття таблички
+  відтворюються тими самими.
 """
 
     def __init__(self, parent, gs=None):
@@ -110,6 +153,8 @@ class SchemeConstructorWindow(HPResultsViewMixin):
         # автоматично під час рандомізації/однорідності або виведенням
         # з послідовних повних наборів комбінацій при збереженні)
         self._table_built = False
+        self._step2_open = False       # Крок 2 розблоковано (фактори задано)
+        self._qr_settings = {}         # налаштування QR-табличок (код досліду тощо) – зберігаються у файлі схеми
         self._build()
 
     # ─────────────────────────────────────────────────────
@@ -237,14 +282,17 @@ class SchemeConstructorWindow(HPResultsViewMixin):
         tk.Label(self._area_split_main_frame, text="Головний фактор (whole-plot):", font=rf
                  ).pack(side=tk.LEFT)
         self._area_split_main_var = tk.StringVar(value="A")
+        self._area_split_main_var.trace_add("write", self._on_area_inputs_changed)
         self._area_split_main_cb = ttk.Combobox(self._area_split_main_frame,
                     textvariable=self._area_split_main_var, width=6, state="readonly")
         self._area_split_main_cb.pack(side=tk.LEFT, padx=6)
         self._area_design_disp.trace_add("write", lambda *_: self._on_area_design_change())
+        self._area_design_disp.trace_add("write", self._on_area_inputs_changed)
 
         tk.Label(self._step3_area_content, text="Seed рандомізації:", font=rf
                  ).grid(row=2, column=0, sticky="w", pady=(6,0))
         self._av_seed = tk.StringVar(value="2024")
+        self._av_seed.trace_add("write", self._on_area_inputs_changed)
         tk.Entry(self._step3_area_content, textvariable=self._av_seed, width=8, font=rf
                  ).grid(row=2, column=1, sticky="w", padx=8, pady=(6,0))
 
@@ -267,6 +315,11 @@ class SchemeConstructorWindow(HPResultsViewMixin):
                                    bg="#1a6b1a", fg="white", font=rf,
                                    command=self._save_scheme)
         self._save_btn.pack(side=tk.LEFT, padx=4)
+        self._qr_btn = tk.Button(self._step4_frame, text="🏷 QR-таблички для ділянок…", bg="#6a1b9a", fg="white", font=rf,
+                                 command=self._open_qr_dialog)
+        self._qr_btn.pack(side=tk.LEFT, padx=4)
+        tk.Label(self._step4_frame, text="QR-код для кожної ділянки: табличка, карта розкладки, чек-лист; за кодом польовий журнал впізнає ділянку.",
+                 font=("Times New Roman", 9), fg="#666").pack(side=tk.LEFT, padx=8)
         self._set_step_enabled(self._step4_frame, False)
 
         # ── Легенда факторів ────────────────────────────────
@@ -301,7 +354,10 @@ class SchemeConstructorWindow(HPResultsViewMixin):
         state = tk.NORMAL if enabled else tk.DISABLED
         def _walk(w):
             for c in w.winfo_children():
-                if isinstance(c, (tk.Button, tk.Entry, tk.Spinbox, ttk.Combobox, tk.Radiobutton)):
+                if isinstance(c, ttk.Combobox):
+                    try: c.configure(state="readonly" if enabled else "disabled")     # списки лишаються «лише вибір»
+                    except tk.TclError: pass
+                elif isinstance(c, (tk.Button, tk.Entry, tk.Spinbox, tk.Radiobutton)):
                     try: c.configure(state=state)
                     except tk.TclError: pass
                 _walk(c)
@@ -312,11 +368,13 @@ class SchemeConstructorWindow(HPResultsViewMixin):
         base_txt = "Крок 2 — Розміри"
         self._step2_frame.configure(text=base_txt)
         self._set_step_enabled(self._step2_frame, True)
+        self._step2_open = True
         if self.factor_defs:
             self._area_split_main_cb.configure(
                 values=[FACTOR_LETTERS[i] for i in range(len(self.factor_defs))])
             if self._area_split_main_var.get() not in FACTOR_LETTERS[:len(self.factor_defs)]:
                 self._area_split_main_var.set(FACTOR_LETTERS[0])
+        self._on_area_inputs_changed()          # площинна модель: одразу перевіряємо введення й, якщо воно коректне, відкриваємо Крок 3
 
     def _unlock_step3(self):
         base_txt = "Крок 3 — Заповнення таблиці"
@@ -360,6 +418,9 @@ class SchemeConstructorWindow(HPResultsViewMixin):
         self.factor_defs = []
         self.fixed_factor_idx = None
         self._factors_status.configure(text="(фактори не задано)", fg="#888")
+        self._step2_open = False
+        self._qr_settings = {}
+        self._area_size_status.configure(text=""); self._area_avail_status.configure(text="")
         self._table_built = False
         for w in self.inner.winfo_children(): w.destroy()
         self.entries = []; self.row_labels = []; self.pos_labels = []
@@ -375,10 +436,88 @@ class SchemeConstructorWindow(HPResultsViewMixin):
         self._set_step_enabled(self._step4_frame, False)
         self._area_plan_status_lbl.configure(text="")
 
+    def _validate_area_size(self):
+        """Єдина перевірка введення Кроку 2 площинної моделі – і для живого розблокування Кроку 3, і для формування плану.
+        → (ok, повідомлення, info)."""
+        if not self.factor_defs: return False, "Спочатку задайте фактори (Крок 1).", None
+        design = self._area_design_map.get(self._area_design_disp.get())
+        k = 1
+        for fd in self.factor_defs: k *= len(fd["levels"])
+        def num(var):
+            return float(str(var.get()).strip().replace(",", "."))
+        reps = k                                        # латинський квадрат: повторностей стільки, скільки комбінацій
+        if design != "latin":
+            try: reps = int(str(self._av["reps"].get()).strip())
+            except ValueError: return False, "Кількість повторностей – ціле число (наприклад, 4).", None
+            if not (2 <= reps <= 50):
+                return False, "Кількість повторностей має бути від 2 до 50 (з однією повторністю помилку досліду оцінити неможливо).", None
+        mode = self._area_size_mode_var.get()
+        try:
+            if mode == "rep_area":
+                ra, pw = num(self._av["rep_area"]), num(self._av["pw_ra"])
+                if ra <= 0 or pw <= 0: raise ValueError
+                pl = (ra / k) / pw
+            else:
+                pw, pl = num(self._av["pw"]), num(self._av["pl"])
+                if pw <= 0 or pl <= 0: raise ValueError
+            border, buf = num(self._av["border"]), num(self._av["buffer"])
+        except ValueError:
+            return False, "Розміри ділянки – додатні числа; захисна смуга й буфер – числа не менші за нуль.", None
+        if border < 0 or buf < 0: return False, "Захисна смуга й буфер не можуть бути від'ємними.", None
+        net_w, net_l = pw - 2 * border, pl - 2 * border
+        if net_w <= 0 or net_l <= 0:
+            return False, f"Захисна смуга {border:g} м завелика: на ділянці {pw:.2f}×{pl:.2f} м не лишається облікової площі.", None
+        if design == "latin" and k > 8: return False, f"Латинський квадрат: максимум 8 комбінацій факторів, у вас {k}.", None
+        n_plots = k * k if design == "latin" else k * reps
+        gross = pw * pl; total = gross * n_plots + n_plots * (2 * (pw + pl) * buf + 4 * buf ** 2) / 2
+        avail = ""
+        txt = str(self._av["avail_area"].get()).strip()
+        if txt:
+            try:
+                a = num(self._av["avail_area"])
+                if a > 0: avail = (f"\n⚠ Площі не вистачає: потрібно ≈ {total:.0f} м², доступно {a:.0f} м² (бракує {total - a:.0f} м²)." if total > a
+                                   else f"\n✓ Доступної площі достатньо (запас {a - total:.0f} м²).")
+            except ValueError: pass
+        return True, "", {"reps": reps, "k": k, "n_plots": n_plots, "pw": pw, "pl": pl, "gross": gross, "net": net_w * net_l, "total": total,
+                          "avail": avail, "design": design}
+
+    def _on_area_inputs_changed(self, *_):
+        """Живе керування кроками площинної моделі: коректне введення на Кроці 2 одразу відкриває Крок 3 з підсумком; некоректне –
+        блокує Крок 3 і Крок 4 та пояснює причину; будь-яка зміна параметрів робить сформований план застарілим."""
+        if self._model_var.get() != "area" or not self._step2_open or not self.factor_defs: return
+        if self._area_plan is not None:
+            self._area_plan = None
+            self._area_plan_status_lbl.configure(text="Параметри змінено – сформуйте план ще раз («▶ Сформувати план»).", fg="#8c5a1a")
+            self._step4_frame.configure(text="Крок 4 — Зберегти схему (спочатку сформуйте план)")
+            self._set_step_enabled(self._step4_frame, False)
+        ok, msg, info = self._validate_area_size()
+        if not ok:
+            self._area_size_status.configure(text="⚠ " + msg, fg="#c62828"); self._area_avail_status.configure(text="")
+            self._step3_frame.configure(text="Крок 3 — Заповнення (спочатку виправте розміри на Кроці 2)")
+            self._set_step_enabled(self._step3_frame, False)
+            self._step4_frame.configure(text="Крок 4 — Зберегти схему (спочатку виконайте Крок 3)")
+            self._set_step_enabled(self._step4_frame, False)
+            return
+        if info["design"] == "latin":
+            head = (f"✓ Розміри прийнято: латинський квадрат {info['k']}×{info['k']} = {info['n_plots']} {_pl(info['n_plots'], 'ділянка', 'ділянки', 'ділянок')} "
+                    f"(повторностей стільки, скільки комбінацій)")
+        else:
+            head = (f"✓ Розміри прийнято: {info['k']} {_pl(info['k'], 'комбінація', 'комбінації', 'комбінацій')} × {info['reps']} "
+                    f"{_pl(info['reps'], 'повторність', 'повторності', 'повторностей')} = {info['n_plots']} {_pl(info['n_plots'], 'ділянка', 'ділянки', 'ділянок')}")
+        self._area_size_status.configure(
+            text=f"{head}; ділянка {info['pw']:.2f}×{info['pl']:.2f} м = {info['gross']:.1f} м² (облікова {info['net']:.1f} м²); "
+                 f"орієнтовна площа поля ≈ {info['total']:.0f} м². Крок 3 доступний.", fg="#1a6b1a")
+        self._area_avail_status.configure(text=info["avail"].strip(), fg="#c62828" if "не вистачає" in info["avail"] else "#1a6b1a")
+        self._step3_frame.configure(text="Крок 3 — Заповнення")
+        self._set_step_enabled(self._step3_frame, True)
+
     def _generate_area_plan(self):
         import random
         if not self.factor_defs:
             messagebox.showwarning("", "Спочатку задайте фактори."); return
+        ok_, msg_, _info = self._validate_area_size()
+        if not ok_:
+            messagebox.showwarning("Перевірте введення", msg_); return
         try:
             reps = int(self._av["reps"].get())
             seed = int(self._av_seed.get())
@@ -862,6 +1001,12 @@ class SchemeConstructorWindow(HPResultsViewMixin):
                  ).grid(row=6, column=1, sticky="w", padx=6, pady=(6,2))
         tk.Label(frm, text="Програма звірить і чесно попередить, якщо землі не вистачає",
                  font=("Times New Roman",9), fg="#666").grid(row=6, column=2, sticky="w", pady=(6,2))
+        self._area_size_status = tk.Label(frm, text="", font=("Times New Roman", 10, "bold"), fg="#1a6b1a", justify="left",
+                                          wraplength=900, anchor="w")
+        self._area_size_status.grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self._area_avail_status = tk.Label(frm, text="", font=("Times New Roman", 10, "bold"), fg="#1a6b1a", justify="left", wraplength=900, anchor="w")
+        self._area_avail_status.grid(row=8, column=0, columnspan=3, sticky="w")
+        for _v in self._av.values(): _v.trace_add("write", self._on_area_inputs_changed)
         return frm
 
     def _on_area_size_mode(self, *_):
@@ -871,6 +1016,7 @@ class SchemeConstructorWindow(HPResultsViewMixin):
         else:
             self._area_rep_frame.grid_forget()
             self._area_wh_frame.grid(row=3, column=0, columnspan=3, sticky="w")
+        self._on_area_inputs_changed()
 
     def _build_legend(self):
         for w in self._legend_f.winfo_children(): w.destroy()
@@ -1675,10 +1821,12 @@ class SchemeConstructorWindow(HPResultsViewMixin):
         """Визначає номер повторності для кожної облікової клітинки БЕЗ
         окремого стовпця — рахує послідовні повні набори всіх комбінацій
         факторів у порядку сканування таблиці (ряд за рядом, зліва
-        направо), не перетинаючи межу рядів. Кожен повний набір із
-        total_combos облікових клітинок — одна повторність."""
+        направо), не перетинаючи межу рядів. Повний набір – це
+        total_combos × plot_size облікових клітинок (кожна комбінація
+        представлена plot_size рослинами) – одна повторність."""
         total_combos = 1
         for d in self.factor_defs: total_combos *= len(d["levels"])
+        needed = total_combos * max(1, int(self.plot_size))      # повторність = усі комбінації × кількість рослин на комбінацію (Крок 1)
         rep_map = {}
         rep_counter = 0
         for i, row in enumerate(self.entries):
@@ -1690,7 +1838,7 @@ class SchemeConstructorWindow(HPResultsViewMixin):
                         rep_counter += 1
                     rep_map[(i+1, j+1)] = rep_counter
                     count_in_block += 1
-                    if count_in_block >= total_combos:
+                    if count_in_block >= needed:
                         count_in_block = 0
         return rep_map
 
@@ -1722,14 +1870,15 @@ class SchemeConstructorWindow(HPResultsViewMixin):
             return HP_ROLE_RECORDED, "ok", None, factors
         return None, None, None, None   # нерозпізнано
 
-    def _save_scheme(self):
+    def _build_scheme_dict(self):
+        """Словник схеми (формат .sadp) для збереження й для QR-табличок. None – якщо схема ще не готова або користувач відмовився."""
         if not self.factor_defs:
-            messagebox.showwarning("", "Спочатку задайте фактори."); return
+            messagebox.showwarning("", "Спочатку задайте фактори."); return None
 
         model = self._model_var.get()
         if model == "area":
             if not self._area_plan:
-                messagebox.showwarning("", "Спочатку сформуйте план (Крок 3)."); return
+                messagebox.showwarning("", "Спочатку сформуйте план (Крок 3)."); return None
             plants = []
             for p in self._area_plan["plan"]:
                 combo = p["combo"]
@@ -1751,7 +1900,7 @@ class SchemeConstructorWindow(HPResultsViewMixin):
             }
         else:
             if not self._table_built:
-                messagebox.showwarning("", "Спочатку побудуйте таблицю."); return
+                messagebox.showwarning("", "Спочатку побудуйте таблицю."); return None
 
             inferred_reps = self._infer_replications()
             plants = []
@@ -1781,7 +1930,7 @@ class SchemeConstructorWindow(HPResultsViewMixin):
                         f"«-», «+», «×», число, або порожні):\n\n{preview}{more}\n\n"
                         "Зберегти попри це (ці клітинки будуть позначені як "
                         "непризначені)?"):
-                    return
+                    return None
             area_extra = {"model": "plant",
                           "design_used": getattr(self, "_last_design_used", "custom"),
                           "split_main_idx": getattr(self, "_last_split_main_idx", None)}
@@ -1790,7 +1939,8 @@ class SchemeConstructorWindow(HPResultsViewMixin):
             "type": "multi_factor_scheme", "version": APP_VER,
             "cfg": {"trait_name": getattr(self, "_trait_name", ""),
                     "trait_unit": getattr(self, "_trait_unit", ""),
-                    **area_extra},
+                    **area_extra,
+                    **({"qr": dict(self._qr_settings)} if self._qr_settings else {})},
             "factor_defs": self.factor_defs,
             "variant_names": [],
             "plants": [{"row": p.row, "position": p.position, "value": p.value,
@@ -1798,6 +1948,25 @@ class SchemeConstructorWindow(HPResultsViewMixin):
                        "variant": p.variant, "replication": p.replication,
                        "factors": p.factors} for p in plants],
         }
+        return d
+
+    def _open_qr_dialog(self):
+        """QR-таблички для ділянок готової схеми (обидві моделі)."""
+        d = self._build_scheme_dict()
+        if d is None: return
+        import sad_qrlabels as QL
+        try: QL.build_experiment(d, "AAAA")
+        except ValueError as e:
+            messagebox.showwarning("QR-таблички", str(e)); return
+        from sad_qr_dialog import QRLabelsDialog
+        self._qr_dialog = QRLabelsDialog(self.win, d, self._qr_settings, self._set_qr_settings)
+
+    def _set_qr_settings(self, st):
+        self._qr_settings = dict(st)
+
+    def _save_scheme(self):
+        d = self._build_scheme_dict()
+        if d is None: return
         default_name = "схема_" + "_".join(fd["name"] for fd in self.factor_defs)[:40] + ".sadp"
         path = filedialog.asksaveasfilename(
             parent=self.win, defaultextension=".sadp", initialfile=default_name,
@@ -1836,6 +2005,7 @@ class SchemeConstructorWindow(HPResultsViewMixin):
             fg="#1a6b1a")
 
         cfg = d.get("cfg", {})
+        self._qr_settings = dict(cfg.get("qr") or {})
         self._last_design_used = cfg.get("design_used", "custom")
         self._last_split_main_idx = cfg.get("split_main_idx")
         self._trait_name = cfg.get("trait_name", "")

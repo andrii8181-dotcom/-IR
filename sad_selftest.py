@@ -11,13 +11,13 @@ MODULES = ['sad_app', 'sad_assoc_core', 'sad_assoc_sections', 'sad_breeding', 's
            'sad_control_core', 'sad_corr_core', 'sad_corr_sections', 'sad_correlation', 'sad_descriptive_ttest', 'sad_design_core',
            'sad_design_sections', 'sad_gencorr_core', 'sad_gencorr_sections', 'sad_gxe_core', 'sad_het_ord_sections',
            'sad_heterosis_core', 'sad_homogeneous', 'sad_journal_trial', 'sad_manova', 'sad_mixed_core', 'sad_mixed_sections',
-           'sad_ordinal_core', 'sad_regression', 'sad_repeated', 'sad_scheme_constructor', 'sad_selection_core',
+           'sad_ordinal_core', 'sad_phenology', 'sad_phenology_dialogs', 'sad_phenology_results', 'sad_phenology_win', 'sad_qr_dialog', 'sad_qrlabels', 'sad_regression', 'sad_report', 'sad_repeated', 'sad_scheme_constructor', 'sad_selection_core',
            'sad_selection_sections', 'sad_stability_ancova', 'sad_weather', 'sad_weather_charts', 'sad_weather_core', 'sad_weather_export', 'sad_weather_indices', 'sad_worldmap']
 WINDOWS = ["CorrelationWindow", "DescriptiveWindow", "TTestWindow", "RegressionWindow", "ClusterWindow", "PCAWindow",
            "RepeatedMeasuresWindow", "MixedRepeatedWindow", "StabilityWindow", "AncovaWindow", "ManovaWindow", "FieldJournalWindow",
            "SchemeConstructorWindow", "WeatherWindow", "BreedingStabilityWindow", "GenParWindow", "CombAbilityWindow", "StressWindow",
            "PathWindow", "ControlWindow", "MixedWindow", "DesignWindow", "SelectionWindow", "HeterosisWindow", "ScoresWindow",
-           "GenCorrWindow", "AssocWindow"]
+           "GenCorrWindow", "AssocWindow", "PhenologyWindow"]
 
 
 class _Log:
@@ -99,6 +99,54 @@ def run(main_module, out_path=None):
         assert len(sp["rows"]) == 12 and all(r["spi"][3] == r["spi"][3] for r in sp["rows"])
         st_ = W.default_settings(); st_["lat"] = 48.75; rep = W.build_report(ser.slice(dt.date(2020, 1, 1), dt.date(2023, 12, 31)), st_, spi=sp)
         assert rep["intl"]["pet_method"] == "pm" and rep["intl"]["vine"] and rep["intl"]["aridity"]
+    def t_phenology():
+        import datetime as _d
+        import sad_phenology as PH
+        assert PH.parse_date_flex("12 травня", 2026)[0] == _d.date(2026, 5, 12) and PH.parse_date_flex("31.04", 2026)[0] is None
+        phs = [p for p in PH.preset_phases("pome") if p["key"] in ("bloom0", "bloom50", "bloom1")]; rows = []
+        for c, e in (("A", 0), ("B", 3), ("C", 9)):
+            for r in (1, 2, 3):
+                b = _d.date(2026, 5, 1) + _d.timedelta(days=e + r % 2)
+                rows.append({"name": c, "rep": str(r), "dates": {"bloom0": PH.fmt_date(b), "bloom50": PH.fmt_date(b + _d.timedelta(days=4)), "bloom1": PH.fmt_date(b + _d.timedelta(days=10))}})
+        ctx = PH.analyze({2026: rows}, phs, "A", 3.0)
+        assert ctx["n_obs"] == 27 and ctx["vs"][("C", "bloom0")][1] == "пізній" and ctx["anova"]["bloom0"]["p"] < 0.001 and ctx["anova"]["bloom0"]["letters"]["A"] == "a"
+        an = ctx["anova"]["bloom0"]; assert ctx["compare"]["bloom0"]["method"] == "lsd" and an["h2"] > 0.8
+        for _m in ("tukey", "sk", "control", "kw", "bonferroni", "duncan"):
+            _r = PH.compare_means(ctx["records"], "bloom0", an, _m, "A"); assert _r["groups"] and "error" not in _r, _m
+        assert PH.scott_knott({"a": 0.0, "b": 0.1, "c": 20.0, "d": 20.1}, 0.25, 12, 3)["a"] == 0 and abs(PH.holm_adjust([0.01, 0.04, 0.03])[1] - 0.06) < 1e-12
+        assert PH.onset_from_visits([(_d.date(2026, 5, 1), 0), (_d.date(2026, 5, 5), 20), (_d.date(2026, 5, 9), 80)], 50)[0] == _d.date(2026, 5, 7)
+    def t_report():
+        import tempfile, shutil, os
+        import sad_report as RP
+        from matplotlib.figure import Figure
+        fig = Figure(figsize=(4, 3)); fig.add_subplot(111).plot([1, 2, 3]); fig.axes[0].set_title("Тест")
+        items = [{"kind": "heading", "text": "Розділ", "level": 3}, {"kind": "text", "text": "Абзац", "warn": False},
+                 {"kind": "table", "headers": ["Джерело", "SS", "p"], "rows": [["A", "1,50", "0,012"], ["Залишок", "3,2", ""]], "fills": ["C8E6C9", None], "widths": [100, 60, 60]},
+                 {"kind": "figure", "fig": fig}]
+        d = tempfile.mkdtemp()
+        try:
+            RP.export_docx(os.path.join(d, "t.docx"), items, "Тест", "підзаголовок"); RP.export_xlsx(os.path.join(d, "t.xlsx"), items, "Тест")
+            import docx, openpyxl
+            dd = docx.Document(os.path.join(d, "t.docx")); assert len(dd.tables) == 1 and dd.tables[0].style.name == "Table Grid" and len(dd.inline_shapes) == 1
+            wb = openpyxl.load_workbook(os.path.join(d, "t.xlsx")); assert wb.worksheets[1]["B2"].value == 1.5 and "Графіки" in wb.sheetnames
+        finally: shutil.rmtree(d, ignore_errors=True)
+    def t_qrlabels():
+        import tempfile, itertools, shutil
+        import sad_qrlabels as QL
+        fd = [{"name": "Сорт", "levels": ["Голден", "Гала"]}, {"name": "Добриво", "levels": ["0", "N60"]}]
+        plants = [{"row": b, "position": j, "role": "recorded", "replication": b, "factors": {"Сорт": c[0], "Добриво": c[1]}}
+                  for b in (1, 2) for j, c in enumerate(itertools.product((1, 2), (1, 2)), 1)]
+        data = QL.build_experiment({"factor_defs": fd, "cfg": {"model": "area"}, "plants": plants}, "K7M2", "Тест"); QL.fill_payloads(data, "descriptive", "m", "S")
+        assert len(data["plots"]) == 8 and all(QL.parse_payload(p["payload"])["valid"] for p in data["plots"])
+        d = tempfile.mkdtemp()
+        try:
+            files = QL.save_all(d, data, "S", {}, dpi=100); assert len(files) == 4 + 8, len(files)
+            assert open(files[0], "rb").read(4) == b"%PDF" and b"DejaVuSans" in open(files[0], "rb").read()      # кирилицю вбудовано
+            assert open(files[1], "rb").read(4) == b"%PDF" and open(files[4], "rb").read(4) == b"\x89PNG"
+            QL.fill_payloads(data, "descriptive", "m", "R58x40"); rp = os.path.join(d, "roll.pdf")      # рулон для принтера етикеток
+            assert QL.render_labels_pdf(rp, data, "R58x40", {"mono": True, "printer_dpi": 203}) == 8 and open(rp, "rb").read(4) == b"%PDF"
+            img = QL.render_label_png(data, data["plots"][0], "R58x40", {"mono": True}, dpi=203); assert img.mode == "1" and img.size == (464, 320), img.size
+        finally: shutil.rmtree(d, ignore_errors=True)
     def t_worldmap():
         import sad_worldmap as WM
         D = WM.MapData.get()
@@ -115,7 +163,7 @@ def run(main_module, out_path=None):
         s0 = dt.date(2022, 1, 1); n = 730; rg = np.random.default_rng(10); dts = [s0 + dt.timedelta(days=i) for i in range(n)]
         t = 9 + 11 * np.sin(2 * np.pi * np.array([d.timetuple().tm_yday for d in dts]) / 365)
         stt = W.default_settings(); stt["lat"] = 48.75                      # широта потрібна для вінограрських індексів
-        rep = W.build_report(W.DailySeries(dts, {"tmean": t, "tmax": t + 4, "tmin": t - 4, "prec": rg.random(n) * 5}), stt)
+        rep = W.build_report(W.DailySeries(dts, {"tmean": t, "tmax": t + 4, "tmin": t - 4, "prec": rg.random(n) * 5, "rh": 55 + 25 * rg.random(n)}), stt)
         for kind, _ in CH.CHARTS:
             f = Figure(); res = CH.build_chart(f, kind, rep, "Тест", {"general": {"width_cm": 18, "font_family": "DejaVu Sans"}, "colors": {kind: {}}})
             if kind == "spi": assert isinstance(res, str) and "SPI" in res, res          # SPI потребує довгого ряду: діаграма пояснює, що робити
@@ -129,6 +177,9 @@ def run(main_module, out_path=None):
                  ("розрахунок: генетичні параметри", t_breeding), ("розрахунок: кореляції (Кендалл, частинна)", t_corr),
                  ("розрахунок: генотипні кореляції", t_gencorr), ("розрахунок: η, бісеріальні, спряженість", t_assoc), ("scipy: stats/special/sparse/spatial/optimize", t_scipy_misc),
                  ("міжнародні показники: ET₀ FAO-56, SPI (scipy gamma.fit), Вінклер, Югліна, індекс сухості", t_indices),
+                 ("фенологія: розбір дат, зведення, ANOVA з НІР і літерами, візити", t_phenology),
+                 ("експорт звіту: Word (таблиці з сіткою, графіки) і Excel", t_report),
+                 ("QR-таблички: ділянки, QR (segno), PDF із кирилицею, PNG, Excel, маніфест", t_qrlabels),
                  ("карта світу: дані, країна, найближче місто, пошук, відсікання", t_worldmap), ("копіювання таблиці: HTML-формат буфера", t_clip),
                  ("діаграми: усі 8 зі стилем користувача", t_chart_style)):
         _check(log, n, f)
@@ -188,6 +239,31 @@ def run(main_module, out_path=None):
             mp.goto(31, 49, 5.5); assert mp.stats["items"] > 100, mp.stats; mp.destroy(); log.ok("віджет карти: малювання")
         except Exception as e:
             log.bad("віджет карти: малювання", e)
+        try:
+            from sad_scheme_constructor import SchemeConstructorWindow
+            sc = SchemeConstructorWindow(root, {}); sc._model_var.set("area"); sc._refresh_model_panels()
+            sc.factor_defs = [{"name": "Сорт", "levels": ["A", "B", "C"]}, {"name": "Добриво", "levels": ["0", "N60"]}]; sc._unlock_step2()
+            def _btns(fr):
+                out = []
+                def walk(x):
+                    for c in x.winfo_children():
+                        if c.winfo_class() == "Button": out.append(str(c.cget("state")))
+                        walk(c)
+                walk(fr); return out
+            assert _btns(sc._step3_area_content) == ["normal"], _btns(sc._step3_area_content)          # Крок 3 відкрито після введення розмірів
+            sc._av["reps"].set("1"); assert _btns(sc._step3_area_content) == ["disabled"]               # некоректні повторності блокують Крок 3
+            sc._av["reps"].set("4"); assert _btns(sc._step3_area_content) == ["normal"] and "24 ділянки" in sc._area_size_status.cget("text")
+            sc._area_plan = None
+            import itertools as _it
+            scheme_ = {"factor_defs": sc.factor_defs, "cfg": {"model": "area", "design_used": "rcbd"},
+                       "plants": [{"row": b, "position": j, "role": "recorded", "replication": b, "factors": {"Сорт": c[0], "Добриво": c[1]}}
+                                  for b in (1, 2) for j, c in enumerate(_it.product((1, 2, 3), (1, 2)), 1)]}
+            from sad_qr_dialog import QRLabelsDialog
+            dlg = QRLabelsDialog(sc.win, scheme_, {}, None); dlg._rebuild(); assert dlg.data is not None and len(dlg.data["plots"]) == 12 and dlg._photo is not None   # перегляд (PIL.ImageTk) працює
+            dlg.win.destroy()
+            sc.win.destroy(); log.ok("конструктор схеми: повторності відкривають Крок 3 (площинна модель); діалог QR-табличок із переглядом")
+        except Exception as e:
+            log.bad("конструктор схеми: повторності відкривають Крок 3 (площинна модель); діалог QR-табличок із переглядом", e)
         try: root.destroy()
         except Exception: pass
     except Exception as e:

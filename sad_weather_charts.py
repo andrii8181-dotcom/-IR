@@ -16,6 +16,7 @@ CHARTS = [
     ("cum_set", "Нагромаджена сума ефективних температур (за роками)"),
     ("htc_decade", "ГТК за декадами"),
     ("htc_month", "ГТК за місяцями"),
+    ("humidity", "Вологість повітря й дефіцит насичення (за місяцями)"),
     ("years_cmp", "Порівняння років (температура й опади у вікні)"),
     ("vine", "Вінклер і Югліна за сезонами"),
     ("spi", "SPI за місяцями"),
@@ -115,6 +116,9 @@ def components(kind, rep=None):
         return [(f"y{y}", f"{y} р.", TAB[i % 10]) for i, y in enumerate(yrs)]
     if kind in ("htc_decade", "htc_month"):
         return [(c, HTC_NAMES[c], HTC_COLORS[c]) for c in ("d4", "d3", "d2", "d1", "ok", "wet")] + [("na", "немає даних", HTC_COLORS["na"])]
+    if kind == "humidity":
+        return [("rh", "Середня вологість (стовпчики)", "#6baed6"), ("vpd", "Дефіцит насичення VPD (лінія)", "#d94801"),
+                ("hi", f"Діб з вологістю ≥ {W.RH_HI:g} %", "#2166ac"), ("lo", f"Діб з вологістю ≤ {W.RH_LO:g} %", "#e08214"), ("thr", "Пороги вологості (пунктир)", "#777777")]
     if kind == "years_cmp":
         return [("temp", "Температура (точки)", "#b2182b"), ("stem", "Температура (стебла)", "#f4a582"),
                 ("prec", "Опади (стовпчики)", "#4393c3"), ("norm", "Норма (пунктир)", "#333333")]
@@ -178,7 +182,7 @@ def build_chart(fig, kind, rep, place="", style=None):
         fig.clear()
         fn = {"climo_daily": _climo_daily, "climo_decade": _climo_decade, "walter": _walter,
               "cum_prec": _cum_prec, "cum_set": _cum_set, "htc_decade": _htc_decade,
-              "htc_month": _htc_month, "years_cmp": _years_cmp, "vine": _vine, "spi": _spi}.get(kind)
+              "htc_month": _htc_month, "humidity": _humidity, "years_cmp": _years_cmp, "vine": _vine, "spi": _spi}.get(kind)
         if fn is None:
             return "Невідомий тип діаграми."
         try:
@@ -375,6 +379,36 @@ def _htc_decade(fig, rep, place, st):
 def _htc_month(fig, rep, place, st):
     rows = rep["months"]
     return _htc_bars(fig, rep, place, st, rows, [r["label"] for r in rows], "ГТК за місяцями", 45)
+
+
+def _humidity(fig, rep, place, st):
+    """Середня вологість повітря за місяцями (стовпчики) з дефіцитом насичення VPD (лінія, права вісь) і кількістю діб із високою / низькою вологістю."""
+    s = rep["series"]
+    if not s.has("rh"):
+        return ("У даних немає вологості повітря. NASA POWER її надає (параметр RH2M); у власному файлі додайте стовпець «Вологість» (%).")
+    rows = [r for r in rep["months"] if not math.isnan(r.get("rh", float("nan")))]
+    if not rows:
+        return "Немає місяців із даними про вологість."
+    ax, ax3 = fig.subplots(2, 1, sharex=True, gridspec_kw={"height_ratios": [2.2, 1]})
+    xs = np.arange(len(rows)); lw, ms = st.g["line_width"], st.g["marker_size"]
+    c_rh, c_v, c_hi, c_lo, c_thr = st.col("rh", "#6baed6"), st.col("vpd", "#d94801"), st.col("hi", "#2166ac"), st.col("lo", "#e08214"), st.col("thr", "#777777")
+    ax.bar(xs, [r["rh"] for r in rows], width=0.8, color=c_rh, edgecolor="#444", lw=0.4)
+    ax.axhline(W.RH_HI, color=c_thr, lw=0.8, ls="--"); ax.axhline(W.RH_LO, color=c_thr, lw=0.8, ls="--")
+    ax.set_ylim(0, 112); ax.set_ylabel("Середня відносна вологість, %")
+    if len(rows) <= 36:
+        for x, r in zip(xs, rows): ax.text(x, r["rh"] + 1.2, f"{r['rh']:.0f}", ha="center", va="bottom", fontsize=max(5.0, st.g["tick_size"] - 2))
+    ax2 = ax.twinx(); ax2.spines["right"].set_visible(True)
+    vp = [r["vpd"] for r in rows]; ax2.plot(xs, vp, color=c_v, lw=lw, marker="o", ms=ms); ax2.set_ylabel("VPD, кПа")
+    fin = [v for v in vp if not math.isnan(v)]; ax2.set_ylim(0, max(0.5, max(fin) * 1.25) if fin else 1.0)
+    _legend(ax, st, [Patch(facecolor=c_rh, edgecolor="#444", label="Вологість повітря, % (стовпчики)"), Line2D([0], [0], color=c_v, lw=lw, marker="o", label="VPD, кПа (лінія, права вісь)"),
+                     Line2D([0], [0], color=c_thr, lw=0.8, ls="--", label=f"Пороги {W.RH_LO:g} % і {W.RH_HI:g} %")], default_loc="upper left", ncol=3)
+    w = 0.38; ax3.bar(xs - w / 2, [r["days_rh_hi"] for r in rows], width=w, color=c_hi); ax3.bar(xs + w / 2, [r["days_rh_lo"] for r in rows], width=w, color=c_lo)
+    ax3.set_ylabel("Діб у місяці"); _headroom(ax3, st, 0.4); _legend(ax3, st, [Patch(facecolor=c_hi, label=f"вологість ≥ {W.RH_HI:g} %"), Patch(facecolor=c_lo, label=f"вологість ≤ {W.RH_LO:g} %")], default_loc="upper right", ncol=2)
+    step = max(1, len(rows) // 36); ax3.set_xticks(xs[::step]); rot = 45 if len(rows) > 12 else 0
+    ax3.set_xticklabels([r["label"] for r in rows][::step], rotation=rot, fontsize=max(5.0, st.g["tick_size"] - 1.5), ha="right" if rot else "center")
+    _title(ax, st, rep, place, "Вологість повітря")
+    fig.text(0.99, 0.005, "RH2M (NASA POWER) – модель, сітка ≈ 50 км; VPD – за добовими середніми", ha="right", va="bottom", fontsize=max(5.0, st.g["legend_size"] - 2), color="#666")
+    fig.tight_layout(rect=(0, 0.02, 1, 1))
 
 
 def _years_cmp(fig, rep, place, st):

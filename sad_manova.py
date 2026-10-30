@@ -637,6 +637,7 @@ MANOVA — ПОКРОКОВА ІНСТРУКЦІЯ
                       b1p, p_sk, b2p, p_ku, box_chi2, box_p,
                       alpha, mv_normal, groups_data, group_levels, Y, p):
         win = tk.Toplevel(self.win); win.title("MANOVA — Результати")
+        win.after_idle(lambda w=win: attach_export_bar(w))                     # Word / Excel: таблиці з сіткою + графіки
         n_dv = len(dv_names); n_grp = len(group_levels)
         # Розмір вікна адаптовано під вміст: більше залежних змінних/груп
         # → ширші таблиці й графіки → трохи більше вікно (в розумних межах).

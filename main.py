@@ -15,6 +15,7 @@ from sad_homogeneous import HelpWindow, HPPlant, HPPlotBuilder
 from sad_journal_trial import FieldJournalWindow
 from sad_scheme_constructor import SchemeConstructorWindow
 from sad_weather import WeatherWindow
+from sad_phenology_win import PhenologyWindow
 
 def _SADTk_new_init(self, root):
     # Ініціалізуємо лише стан (без UI від orig_init)
@@ -103,9 +104,9 @@ def _SADTk_new_init(self, root):
         ("ttest","t-тест / Манн-Уітні","Порівняння двох груп",
          C["green"],TTestWindow,False,None,
          "дві групи порівняння t критерій непараметричний"),
-        ("corr","Кореляційний аналіз","Пірсон · Спірмен · Heat",
+        ("corr","Кореляційний аналіз","Пірсон · Спірмен · Кендалл · частинна",
          C["accent"],CorrelationWindow,True,None,
-         "зв'язок залежність матриця теплова карта пірсон спірмен"),
+         "зв'язок залежність матриця теплова карта пірсон спірмен кендалл частинна кореляція контроль показників"),
         ("reg","Регресійний аналіз","7 моделей · R² · p",
          C["purple"],RegressionWindow,True,None,
          "регресія прогноз r квадрат лінійна нелінійна поліном"),
@@ -176,6 +177,10 @@ def _SADTk_new_init(self, root):
          "#1f7a9c",WeatherWindow,False,None,
          "погода метео температура опади гтк селянінов сума активних температур вегетація клімат "
          "кліматограма вальтер заморозки посуха nasa power карта світу координати норма відхилення"),
+        ("pheno","Фенологічні фази","BBCH · дати · сорти · суми температур",
+         "#2e7d32",PhenologyWindow,False,None,
+         "фенологія фенологічні фази спостереження bbch сходи цвітіння бутонізація дозрівання стиглість листопад сортовивчення ранній пізній дата настання фази "
+         "облік за візитами відсоток рослин сума активних температур до фази бланк"),
         ("fieldjournal","Польовий журнал обліків","Внесення даних у схему досліду",
          C["olive"],FieldJournalWindow,True,None,
          "польовий журнал облік схема внесення даних сезон рік урожайність вимірювання"),
@@ -588,6 +593,7 @@ Email: sad.stat.support@gmail.com
     CATEGORIES = [
         ("Польовий журнал",   ["fieldjournal"]),
         ("Погода",            ["weather"]),
+        ("Фенологія",         ["pheno"]),
         ("ANOVA",             ["anova1","anova2","anova3","anova4"]),
         ("Базові методи",     ["desc","ttest"]),
         ("Зв'язок змінних",  ["corr","assoc","gencorr","reg","ancova"]),

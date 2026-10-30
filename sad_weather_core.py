@@ -14,6 +14,7 @@ import numpy as np
 import sad_weather_indices as WI
 
 NAN = float("nan")
+RH_HI, RH_LO = 80.0, 30.0            # пороги вологості повітря, %: висока (сприятлива для хвороб) і низька (суха повітря)
 
 # ═══════════════════════════════════════════════════════════════
 # 1. ЗМІННІ (внутрішній каталог, спільний для всіх джерел)
@@ -488,6 +489,11 @@ def period_stats(series, base_temps=(5.0, 10.0, 15.0), gdd_base=10.0, gdd_upper=
     r["prec_max_day"] = float(np.nanmax(pr)) if np.any(valid_p) else NAN
     r["dry_spell_max"] = longest_run([(v < 1.0) for v in pr[valid_p]]) if np.any(valid_p) else 0
     r["rh"] = _nan_mean(series.get("rh"))
+    rhv = series.get("rh"); vr_ = ~np.isnan(rhv)
+    r["miss_rh"] = float(np.mean(np.isnan(rhv))) if len(rhv) else 1.0
+    r["days_rh_hi"] = int(np.sum(rhv[vr_] >= RH_HI)) if np.any(vr_) else NAN              # немає вологості – «немає даних», а не нуль діб
+    r["days_rh_lo"] = int(np.sum(rhv[vr_] <= RH_LO)) if np.any(vr_) else NAN
+    r["vpd"] = _nan_mean(WI.vpd_daily(tx, tn, rhv, tm)) if np.any(vr_) else NAN
     r["wind"] = _nan_mean(series.get("wind"))
     r["rad_sum"] = _nan_sum(series.get("rad"))
     r["et0_sum"] = _nan_sum(series.get("et0"))
@@ -580,7 +586,7 @@ def normal_from_years(series_by_year, **kw):
     series_by_year: {рік: DailySeries (вікно)}. Повертає (норма dict, список років)."""
     stats = {y: period_stats(s, **kw) for y, s in series_by_year.items() if len(s) > 0}
     keys = ["tmean", "tmax_mean", "tmin_mean", "prec_sum", "sat_5", "sat_10", "sat_15",
-            "set", "htc", "rad_sum", "et0_sum", "days_frost", "days_tmax30"]
+            "set", "htc", "rad_sum", "et0_sum", "days_frost", "days_tmax30", "rh", "days_rh_hi", "days_rh_lo", "vpd"]
     norm = {}
     for k in keys:
         vals = [st[k] for st in stats.values() if st.get(k) is not None and not
@@ -726,6 +732,10 @@ INDICATOR_DEFS = [
     ("prec_days_1", "Діб з опадами ≥ 1 мм", "діб"),
     ("dry_spell_max", "Найдовший період без опадів (<1 мм)", "діб"),
     ("rad_sum", "Сумарна сонячна радіація", "МДж/м²"),
+    ("rh", "Середня відносна вологість повітря", "%"),
+    ("days_rh_hi", f"Діб з вологістю повітря ≥ {RH_HI:g} %", "діб"),
+    ("days_rh_lo", f"Діб з вологістю повітря ≤ {RH_LO:g} %", "діб"),
+    ("vpd", "Середній дефіцит насичення повітря (VPD)", "кПа"),
     ("et0_sum", "Еталонне випаровування ET₀", "мм"),
     ("water_balance", "Водний баланс (опади – ET₀)", "мм"),
     ("ai", "Індекс сухості P/ET₀ у вікні", ""),

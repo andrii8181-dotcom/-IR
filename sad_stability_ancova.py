@@ -417,6 +417,7 @@ class StabilityWindow:
 
         win = tk.Toplevel(self.win)
         win.title("Аналіз стабільності — Результати")
+        win.after_idle(lambda w=win: attach_export_bar(w))                     # Word / Excel: таблиці з сіткою + графіки
         n_gen = len(gen_names)
         est_h = min(880, max(680, 560 + 14*n_gen))
         win.geometry(f"1150x{est_h}"); set_icon(win)
@@ -1310,6 +1311,7 @@ ANCOVA — ПОКРОКОВА ІНСТРУКЦІЯ
                       slope_details, R2, mse, dfe, alpha, y, yhat, groups,
                       ph_data=None, dv_col="Y", transform_label=None):
         win = tk.Toplevel(self.win); win.title("ANCOVA — Результати")
+        win.after_idle(lambda w=win: attach_export_bar(w))                     # Word / Excel: таблиці з сіткою + графіки
         win.geometry("1150x760"); set_icon(win)
 
         # scrollable body — ширина body синхронізована з canvas, тож усе

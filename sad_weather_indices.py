@@ -24,6 +24,20 @@ def sat_vp(t):
     t = np.asarray(t, float); return 0.6108 * np.exp(17.27 * t / (t + 237.3))
 
 
+def vpd_daily(tmax, tmin, rh, tmean=None):
+    """Дефіцит тиску насиченої водяної пари VPD, кПа: es − ea. es = (e°(tmax) + e°(tmin))/2 (FAO-56, ур. 12); ea = RH/100 · es
+    (RH – середня добова вологість, спрощення ур. 19). Без tmax/tmin беремо es = e°(tсер). Це добове середнє: у години максимальної
+    температури фактичний дефіцит більший."""
+    rh = np.asarray(rh, float)
+    if tmax is not None and tmin is not None and not (np.all(np.isnan(tmax)) or np.all(np.isnan(tmin))):
+        es = (sat_vp(tmax) + sat_vp(tmin)) / 2.0
+    elif tmean is not None:
+        es = sat_vp(tmean)
+    else:
+        return np.full(rh.shape, np.nan)
+    return es * (1.0 - np.clip(rh, 0.0, 100.0) / 100.0)
+
+
 def ra_daily(doy, lat_deg):
     """Позаатмосферна радіація Ra, МДж/м²/добу (FAO-56, ур. 21–25)."""
     j = np.asarray(doy, float); phi = math.radians(lat_deg)

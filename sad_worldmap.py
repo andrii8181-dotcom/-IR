@@ -148,7 +148,7 @@ class MapData:
             score = np.maximum(score, np.where(arr == q, 3, np.where(np.char.startswith(arr, q), 2, np.where(np.char.find(arr, q) >= 0, 1, 0))))
         idx = np.nonzero(score > 0)[0]
         idx = idx[np.lexsort((-self.pop[idx], -score[idx]))][:limit]
-        return [{"label": self.full_label(i), "lat": float(self.pl[i, 1]), "lon": float(self.pl[i, 0]), "pop": float(self.pop[i]), "index": int(i)} for i in idx]
+        return [{"label": self.full_label(i), "lat": float(self.pl[i, 1]), "lon": float(self.pl[i, 0]), "pop": float(self.pop[i]), "index": int(i), "score": int(score[i])} for i in idx]
 
 
 def nice_length(max_m):
@@ -368,6 +368,8 @@ class WorldMap(tk.Canvas):
 # Пошук за назвою (офлайн за містами + необов'язково онлайн, OpenStreetMap)
 # ═══════════════════════════════════════════════════════════════
 class PlaceSearch(tk.Frame):
+    """Пошук населеного пункту за назвою. Один пошук для користувача: спершу власна база міст, а якщо там нічого немає –
+    автоматично інтернет (online_search); користувачеві не потрібно знати, звідки взято результат."""
     def __init__(self, master, on_pick, online_search=None, width=34, lines=9, **kw):
         super().__init__(master, **kw)
         self.on_pick = on_pick; self.online_search = online_search; self.found = []
@@ -375,41 +377,39 @@ class PlaceSearch(tk.Frame):
         row = tk.Frame(self); row.pack(fill=tk.X)
         self.qv = tk.StringVar(); self.ent = tk.Entry(row, textvariable=self.qv, font=RF, width=width); self.ent.pack(side=tk.LEFT, fill=tk.X, expand=True)
         tk.Button(row, text="Знайти", font=RF, command=self.search).pack(side=tk.LEFT, padx=(4, 0))
-        self.lb = tk.Listbox(self, height=lines, font=("Times New Roman", 10), exportselection=False); self.lb.pack(fill=tk.BOTH, expand=True, pady=4)
+        lf = tk.Frame(self); lf.pack(fill=tk.BOTH, expand=True, pady=4)
+        self.lb = tk.Listbox(lf, height=lines, font=("Times New Roman", 10), exportselection=False)
+        hs = ttk.Scrollbar(lf, orient="horizontal", command=self.lb.xview); self.lb.configure(xscrollcommand=hs.set)
+        hs.pack(side=tk.BOTTOM, fill=tk.X); self.lb.pack(fill=tk.BOTH, expand=True)
         self.info = tk.Label(self, text="", font=("Times New Roman", 9), fg="#666", justify="left", wraplength=300, anchor="w"); self.info.pack(fill=tk.X)
-        if online_search:
-            tk.Button(self, text="🌐 Шукати в інтернеті (села, малі пункти)", font=("Times New Roman", 10), command=self.search_online).pack(fill=tk.X, pady=(3, 0))
-            tk.Label(self, text="Онлайн-пошук: OpenStreetMap Nominatim, один запит на натискання; © учасники OpenStreetMap (ODbL).",
-                     font=("Times New Roman", 8), fg="#777", wraplength=300, justify="left").pack(fill=tk.X)
         self.ent.bind("<Return>", lambda e: self.search()); self.lb.bind("<Double-Button-1>", lambda e: self.pick()); self.lb.bind("<Return>", lambda e: self.pick())
-        self.lb.bind("<<ListboxSelect>>", lambda e: None)
 
     def _show(self, res, note=""):
         self.found = res; self.lb.delete(0, tk.END)
         for r in res: self.lb.insert(tk.END, f"{r['label']}  ({r['lat']:.3f}, {r['lon']:.3f})")
         if not res: self.lb.insert(tk.END, "Нічого не знайдено")
+        else: self.lb.selection_set(0)
         self.info.configure(text=note)
 
     def search(self):
         q = self.qv.get().strip()
         if not q: return
         try: res = MapData.get().search(q)
-        except Exception as e: self._show([], f"Помилка пошуку: {e}"); return
-        self._show(res, "Знайдено в довіднику міст світу. Для сіл і малих пунктів скористайтесь онлайн-пошуком." if res else
-                   "У довіднику міст немає такої назви. Спробуйте онлайн-пошук (села, малі пункти) або оберіть місце на карті.")
-        if res: self.lb.selection_set(0)
-
-    def search_online(self):
-        q = self.qv.get().strip()
-        if not q: return
-        self.winfo_toplevel().configure(cursor="watch"); self.update_idletasks()
-        try: res = self.online_search(q)
-        except Exception as e:
-            self.winfo_toplevel().configure(cursor=""); messagebox.showwarning("Онлайн-пошук", str(e), parent=self.winfo_toplevel())
-            self._show(self.found, "Онлайн-пошук недоступний: перевірте інтернет."); return
-        self.winfo_toplevel().configure(cursor="")
-        self._show(res, "Результати OpenStreetMap." if res else "OpenStreetMap нічого не знайшов за цією назвою.")
-        if res: self.lb.selection_set(0)
+        except Exception: res = []                              # немає файла карти – шукаємо далі без нього
+        good = [r for r in res if r.get("score", 3) >= 2]        # точний збіг або початок назви; лише «містить» – ще не підстава вважати знайденим
+        if good: self._show(res); return
+        if not self.online_search:
+            if res: self._show(res, "Точного збігу не знайдено; показано схожі назви.")
+            else: self._show([], "Нічого не знайдено. Перевірте назву.")
+            return
+        top = self.winfo_toplevel(); top.configure(cursor="watch"); self.update_idletasks()
+        err = None
+        try: online = self.online_search(q)
+        except Exception as e: online, err = [], e
+        finally: top.configure(cursor="")
+        if online: self._show(online, "Дані: © учасники OpenStreetMap (ODbL)."); return           # атрибуція – вимога ліцензії
+        if res: self._show(res, "Точного збігу не знайдено; показано схожі назви."); return        # запасний варіант: схожі назви з власної бази
+        self._show([], f"Не вдалося знайти «{q}». Перевірте назву та підключення до інтернету." if err else f"Нічого не знайдено за назвою «{q}». Перевірте написання.")
 
     def pick(self):
         sel = self.lb.curselection()

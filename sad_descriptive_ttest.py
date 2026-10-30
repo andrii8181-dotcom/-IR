@@ -419,6 +419,7 @@ class DescriptiveWindow:
     def _show_result(self, headers, rows, arrays, names):
         win = tk.Toplevel(self.win)
         win.title("Описова статистика — Результати")
+        win.after_idle(lambda w=win: attach_export_bar(w))                     # Word / Excel: таблиці з сіткою + графіки
         win.geometry("1300x760"); set_icon(win)
         if not hasattr(self, "_bp_gs"): self._bp_gs = {}
         if not hasattr(self, "_qq_gs"): self._qq_gs = {}
@@ -862,6 +863,7 @@ SHAPIRO-WILK:
                                state="disabled")
         self.res_txt.pack(fill=tk.BOTH, expand=True)
         vsb.config(command=self.res_txt.yview)
+        self.win.after_idle(lambda: attach_export_bar(self.win, "t-тест / Манн–Уітні", roots=[self.res_txt]))      # Word / Excel
 
         self._update_ui()
 
