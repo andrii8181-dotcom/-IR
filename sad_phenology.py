@@ -386,6 +386,18 @@ def vs_standard(summ, cultivars, phase_keys, standard=None, thr=3.0, ref_of=None
 # ═══════════════════════════════════════════════════════════════
 # 5. ANOVA за номером дня (НІР і літери – тими самими функціями, що й решта програми)
 # ═══════════════════════════════════════════════════════════════
+def heritability(ms_a, ms_axy, F_a, multi):
+    """Успадковуваність у широкому розумінні на рівні середніх сорту. Кілька років: H² = 1 − MS(сорт×рік)/MS(сорт); один рік: 1 − 1/F.
+    MS(сорт×рік) = 0 (взаємодії немає) → H² = 1. Від'ємні значення порядку 10⁻¹⁵ – шум округлення (на різних платформах він
+    різний), тому прирівнюються до нуля; результат обмежено [0; 1]. Невизначені вхідні дані → NaN."""
+    nan = float("nan")
+    if multi:
+        if ms_axy is None or ms_axy != ms_axy or ms_a != ms_a or ms_a <= 0: return nan
+        return min(1.0, max(0.0, 1.0 - max(0.0, ms_axy) / ms_a))
+    if F_a != F_a or F_a <= 0: return nan
+    return min(1.0, max(0.0, 1.0 - 1.0 / F_a))
+
+
 def anova_phase(records, phase, cultivars, alpha=0.05):
     """Вплив сорту (і року, якщо їх кілька) на дату настання фази. Повторності – блоки, якщо у всіх сортів вони однакові й ≥ 2; інакше CRD.
     Літера «a» – найраніший сорт. → словник або {'error': текст}."""
@@ -419,9 +431,7 @@ def anova_phase(records, phase, cultivars, alpha=0.05):
         nm, ss, df, ms, F, p = row[:6]; rows.append({"name": nm, "ss": ss, "df": df, "ms": ms, "F": F, "p": p})
     prow = next((r for r in rows if r["name"] == "Фактор A"), None)
     ms_ = {r["name"]: r["ms"] for r in rows}; F_a = prow["F"] if prow else float("nan")
-    if multi and "Фактор A×Y" in ms_ and ms_["Фактор A×Y"] > 0: h2 = max(0.0, 1.0 - ms_["Фактор A×Y"] / ms_["Фактор A"])
-    elif not multi and F_a == F_a and F_a > 0: h2 = max(0.0, 1.0 - 1.0 / F_a)
-    else: h2 = float("nan")
+    h2 = heritability(ms_.get("Фактор A", float("nan")), ms_.get("Фактор A×Y"), F_a, multi)
     return {"table": rows, "mse": float(mse), "dfe": int(dfe), "means": means, "ns": ns, "n_harm": float(nh), "h2": h2, "letters": letters, "nir": tc * math.sqrt(2 * mse / nh),
             "design": "RCBD (повторності – блоки)" if balanced else "CRD (повна рандомізація)", "multi_year": multi, "years": years,
             "F": prow["F"] if prow else float("nan"), "p": prow["p"] if prow else float("nan"), "alpha": alpha}
