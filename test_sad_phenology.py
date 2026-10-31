@@ -217,7 +217,15 @@ ah = P.anova_phase(recs_h, "p", [f"H{i}" for i in range(k_h)]); exp_h = 4.0 / (4
 check(abs(ah["h2"] - (1 - 1 / ah["F"])) < 1e-9 and abs(ah["h2"] - exp_h) < 0.04, f"H² (на середніх, один рік) = {ah['h2']:.3f}: збігається з 1 − 1/F і з очікуваним {exp_h:.3f} для σ²G = 4, σ²e = 1, r = 3")
 rows_ = {r["name"]: r["ms"] for r in P.anova_phase([dict(r_, year=2024) for r_ in recs_h[:60]] + [dict(r_, year=2025) for r_ in recs_h[60:120]], "p", [f"H{i}" for i in range(20)])["table"]}
 am = P.anova_phase([dict(r_, year=2024) for r_ in recs_h[:60]] + [dict(r_, year=2025, doy=r_["doy"] + 1) for r_ in recs_h[:60]], "p", [f"H{i}" for i in range(20)])
-msd = {r["name"]: r["ms"] for r in am["table"]}; check(abs(am["h2"] - max(0, 1 - msd["Фактор A×Y"] / msd["Фактор A"])) < 1e-12 and 0 <= am["h2"] <= 1, f"H² для кількох років = 1 − MS(сорт×рік)/MS(сорт) = {am['h2']:.3f}")
+msd = {r["name"]: r["ms"] for r in am["table"]}
+check(abs(am["h2"] - 1.0) < 1e-9, f"другий рік – ті самі дати +1 доба (взаємодії сорт×рік немає): H² = 1 незалежно від шуму округлення (MS(сорт×рік) = {msd['Фактор A×Y']:.1e}), а не «немає даних»")
+for noise in (0.0, -1e-15, -3e-14, 3e-15):                       # шум округлення різних платформ (на Windows – нуль або від'ємний)
+    check(abs(P.heritability(10.0, noise, float("nan"), True) - 1.0) < 1e-12, f"MS(сорт×рік) = {noise:.0e} → H² = 1")
+check(math.isnan(P.heritability(10.0, float("nan"), 5.0, True)) and math.isnan(P.heritability(0.0, 1.0, 5.0, True)) and math.isnan(P.heritability(10.0, None, 5.0, True)), "невизначені середні квадрати → NaN (а не хибна одиниця)")
+check(P.heritability(2.0, 4.0, 1.0, True) == 0.0 and P.heritability(1.0, 1.0, 0.5, False) == 0.0 and math.isnan(P.heritability(1.0, 1.0, float("nan"), False)), "взаємодія більша за ефект сорту / F < 1 → H² = 0 (не від'ємна)")
+am2 = P.anova_phase([dict(r_, year=2024) for r_ in recs_h[:60]] + [dict(r_, year=2025, doy=r_["doy"] + int(rgh.integers(-2, 3))) for r_ in recs_h[:60]], "p", [f"H{i}" for i in range(20)])
+ms2 = {r["name"]: r["ms"] for r in am2["table"]}
+check(ms2["Фактор A×Y"] > 0.1 and abs(am2["h2"] - (1 - ms2["Фактор A×Y"] / ms2["Фактор A"])) < 1e-12 and 0 < am2["h2"] < 1, f"з реальною взаємодією: H² = 1 − MS(сорт×рік)/MS(сорт) = {am2['h2']:.3f}")
 check(P.anova_phase(const, "p", nm6).get("h2", 0) != 5, "H² не ламає виродженого випадку")
 # 10. Сотні гібридів
 rg_big = np.random.default_rng(11); K = 300; centers = np.repeat(np.arange(12) * 3.0, K // 12); hyb = [f"G{i:03d}" for i in range(K)]; yd_big = {}
