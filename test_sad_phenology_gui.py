@@ -36,10 +36,10 @@ check(len(w.entries) >= 24 and len(w.entries[0]) == 2 + 15 and [h.cget("text") f
 btns = [b for b in all_w(w.win) if b.winfo_class() == "Button" and b.winfo_ismapped() and b.master.master is w.win or False]
 tbs = [c for c in w.win.winfo_children() if c.winfo_class() == "Frame"][:2]
 vb = [b for f_ in tbs for b in all_w(f_) if b.winfo_class() == "Button"]
-check(all(b.winfo_ismapped() and b.winfo_rootx() + b.winfo_width() <= w.win.winfo_rootx() + w.win.winfo_width() + 2 for b in vb) and len(vb) == 8, f"усі кнопки двох рядків панелі ({len(vb)}) вміщуються у вікні шириною 1260 px")
+check(all(b.winfo_ismapped() and b.winfo_rootx() + b.winfo_width() <= w.win.winfo_rootx() + w.win.winfo_width() + 2 for b in vb) and len(vb) == 9, f"усі кнопки двох рядків панелі ({len(vb)}) вміщуються у вікні шириною 1260 px")
 ovl = [(a.cget("text")[:12], b.cget("text")[:12]) for i, a in enumerate(vb) for b in vb[i + 1:] if not (a.winfo_rootx() + a.winfo_width() <= b.winfo_rootx() or b.winfo_rootx() + b.winfo_width() <= a.winfo_rootx() or a.winfo_rooty() + a.winfo_height() <= b.winfo_rooty() or b.winfo_rooty() + b.winfo_height() <= a.winfo_rooty())]
 check(not ovl, f"кнопки не накладаються ({len(ovl)})")
-txts = [b.cget("text") for b in vb]; check(all(any(x in t for t in txts) for x in ("Аналіз", "Фази", "Вставити з буфера", "Excel", "візитами", "Погода", "Бланк", "Довідка")), "є всі дії: аналіз, фази, буфер, Excel, візити, погода, бланк, довідка")
+txts = [b.cget("text") for b in vb]; check(all(any(x in t for t in txts) for x in ("Аналіз", "Фази", "Вставити з буфера", "Excel", "польового журналу", "візитами", "Погода", "Бланк", "Довідка")), "є всі дії: аналіз, фази, буфер, Excel, візити, погода, бланк, довідка")
 check("Рік" in w.status.cget("text") and "сортів 0" in w.status.cget("text"), f"рядок стану: «{w.status.cget('text')}»")
 
 print("\n== 2. Введення дат: розбір, нормалізація, кольори")
