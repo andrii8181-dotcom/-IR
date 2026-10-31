@@ -114,6 +114,21 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
   друкуйте у масштабі 100 %. Етикетки прямого термодруку (без стрічки)
   темніють на сонці й від тепла – для поля краще термотрансферний друк
   на поліпропіленових етикетках або захисний чохол чи ламінування.
+
+СХЕМИ ДЛЯ БАГАТЬОХ НОМЕРІВ (сотні гібридів, ліній, сортів будь-якої культури)
+  Площинна модель, один фактор (сорт, гібрид, номер), Крок 3 → «Спосіб
+  рандомізації»:
+  • Аугментована (Federer): кожен стандарт – у кожному блоці, нові номери –
+    по одному разу. Похибку оцінено за стандартами (df = (c−1)(b−1), бажано
+    ≥ 10). Потрібно щонайменше 2 стандарти й 2 блоки.
+  • α-решітка: усі номери в кожній повторності, повторність поділено на
+    неповні блоки по k ділянок (k має ділити кількість номерів; програма
+    підкаже можливі значення). Можна додати стандарти в кожен блок.
+  «⭐ Стандарти й групи стиглості…» – позначте стандарти й (за потреби) групи
+  стиглості; кожна група порівнюється зі своїм стандартом. Ці позначки
+  зберігаються у схемі: на етикетках стандартів – «СТАНДАРТ», у журналі – тип
+  ділянки й блок, а «Порівняння зі стандартом», «Змішана модель» і
+  «Фенологічні фази» беруть їх разом із даними кнопкою «📂 З польового журналу…».
   Зберегти можна PDF табличок (на наклейковий чи звичайний папір), PDF
   розкладки, PNG кожної таблички, список в Excel, маніфест (JSON) для
   польового журналу або все разом у теку; кнопка «Друкувати» відкриває
@@ -155,6 +170,7 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
         self._table_built = False
         self._step2_open = False       # Крок 2 розблоковано (фактори задано)
         self._qr_settings = {}         # налаштування QR-табличок (код досліду тощо) – зберігаються у файлі схеми
+        self._std_cfg = {"standards": [], "groups": {}, "group_std": {}}   # стандарти й групи стиглості номерів
         self._build()
 
     # ─────────────────────────────────────────────────────
@@ -273,11 +289,30 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
         tk.Label(self._step3_area_content, text="Спосіб рандомізації:", font=rf
                  ).grid(row=0, column=0, sticky="w")
         self._area_design_map = {"RCBD (рекомендується)": "rcbd", "CRD": "crd",
-                                 "Латинський квадрат": "latin", "Split-plot": "split"}
+                                 "Латинський квадрат": "latin", "Split-plot": "split",
+                                 "Аугментована (сотні номерів, стандарти в кожному блоці)": "augmented",
+                                 "α-решітка (багато номерів, неповні блоки)": "alpha"}
         self._area_design_disp = tk.StringVar(value=list(self._area_design_map.keys())[0])
         ttk.Combobox(self._step3_area_content, textvariable=self._area_design_disp,
-                    values=list(self._area_design_map.keys()), state="readonly", width=22
+                    values=list(self._area_design_map.keys()), state="readonly", width=46
                     ).grid(row=0, column=1, sticky="w", padx=8)
+        # параметри схем для багатьох номерів (аугментована, α-решітка)
+        self._many_frame = tk.Frame(self._step3_area_content)
+        self._aug_row = tk.Frame(self._many_frame); self._aug_row.pack(anchor="w")
+        tk.Label(self._aug_row, text="Блоків:", font=rf).pack(side=tk.LEFT)
+        self._aug_blocks = tk.StringVar(value="5"); self._aug_blocks.trace_add("write", self._on_area_inputs_changed)
+        tk.Entry(self._aug_row, textvariable=self._aug_blocks, width=5, font=rf).pack(side=tk.LEFT, padx=4)
+        tk.Label(self._aug_row, text="(кожен стандарт – у кожному блоці; нові номери – по одному разу)", font=("Times New Roman", 9), fg="#666").pack(side=tk.LEFT)
+        self._alpha_row = tk.Frame(self._many_frame); self._alpha_row.pack(anchor="w")
+        tk.Label(self._alpha_row, text="Ділянок у блоці k:", font=rf).pack(side=tk.LEFT)
+        self._alpha_k = tk.StringVar(value=""); self._alpha_k.trace_add("write", self._on_area_inputs_changed)
+        tk.Entry(self._alpha_row, textvariable=self._alpha_k, width=5, font=rf).pack(side=tk.LEFT, padx=4)
+        self._alpha_checks = tk.BooleanVar(value=False); self._alpha_checks.trace_add("write", self._on_area_inputs_changed)
+        tk.Checkbutton(self._alpha_row, text="додати стандарти в кожен блок", variable=self._alpha_checks, font=rf).pack(side=tk.LEFT, padx=8)
+        self._alpha_hint = tk.Label(self._many_frame, text="", font=("Times New Roman", 9), fg="#666", justify="left", wraplength=620); self._alpha_hint.pack(anchor="w")
+        srow = tk.Frame(self._many_frame); srow.pack(anchor="w", pady=(2, 0))
+        tk.Button(srow, text="⭐ Стандарти й групи стиглості…", font=rf, command=self._open_standards).pack(side=tk.LEFT)
+        self._std_lbl = tk.Label(srow, text="", font=("Times New Roman", 10), fg="#1a4b8c"); self._std_lbl.pack(side=tk.LEFT, padx=8)
         self._area_split_main_frame = tk.Frame(self._step3_area_content)
         tk.Label(self._area_split_main_frame, text="Головний фактор (whole-plot):", font=rf
                  ).pack(side=tk.LEFT)
@@ -446,7 +481,13 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
         def num(var):
             return float(str(var.get()).strip().replace(",", "."))
         reps = k                                        # латинський квадрат: повторностей стільки, скільки комбінацій
-        if design != "latin":
+        many = None; many_err = ""
+        if design in ("augmented", "alpha"):                # помилка параметрів не блокує Крок 3 (там і кнопка стандартів) – показується підказкою
+            if len(self.factor_defs) != 1: return False, "Аугментована схема й α-решітка – для одного фактора (сорт, гібрид, номер): залиште в Кроці 1 один фактор.", None
+            many = self._many_layout_params(k)
+            if isinstance(many, str): many_err, many = many, None
+        if design == "augmented": reps = many["n_blocks"] if many else 1
+        elif design != "latin":
             try: reps = int(str(self._av["reps"].get()).strip())
             except ValueError: return False, "Кількість повторностей – ціле число (наприклад, 4).", None
             if not (2 <= reps <= 50):
@@ -468,7 +509,7 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
         if net_w <= 0 or net_l <= 0:
             return False, f"Захисна смуга {border:g} м завелика: на ділянці {pw:.2f}×{pl:.2f} м не лишається облікової площі.", None
         if design == "latin" and k > 8: return False, f"Латинський квадрат: максимум 8 комбінацій факторів, у вас {k}.", None
-        n_plots = k * k if design == "latin" else k * reps
+        n_plots = k * k if design == "latin" else (many["n_plots"] if many else k * reps)
         gross = pw * pl; total = gross * n_plots + n_plots * (2 * (pw + pl) * buf + 4 * buf ** 2) / 2
         avail = ""
         txt = str(self._av["avail_area"].get()).strip()
@@ -478,8 +519,38 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
                 if a > 0: avail = (f"\n⚠ Площі не вистачає: потрібно ≈ {total:.0f} м², доступно {a:.0f} м² (бракує {total - a:.0f} м²)." if total > a
                                    else f"\n✓ Доступної площі достатньо (запас {a - total:.0f} м²).")
             except ValueError: pass
-        return True, "", {"reps": reps, "k": k, "n_plots": n_plots, "pw": pw, "pl": pl, "gross": gross, "net": net_w * net_l, "total": total,
+        return True, "", {"many": many, "many_err": many_err, "reps": reps, "k": k, "n_plots": n_plots, "pw": pw, "pl": pl, "gross": gross, "net": net_w * net_l, "total": total,
                           "avail": avail, "design": design}
+
+    def _many_layout_params(self, v_total):
+        """Параметри аугментованої схеми чи α-решітки з полів Кроку 3 → dict або текст помилки."""
+        import sad_design_core as D
+        design = self._area_design_map.get(self._area_design_disp.get()); levels = self._entry_levels()
+        std = [x for x in self._std_cfg.get("standards", []) if x in levels]; c = len(std)
+        if design == "augmented":
+            try: b = int(str(self._aug_blocks.get()).strip())
+            except ValueError: return "Кількість блоків – ціле число (наприклад, 5)."
+            if c < 2: return "Аугментована схема: оберіть щонайменше 2 стандарти («⭐ Стандарти й групи стиглості…») – за ними оцінюється похибка."
+            if b < 2: return "Аугментована схема: потрібно щонайменше 2 блоки."
+            n_new = v_total - c
+            if n_new < b: return f"Нових номерів ({n_new}) менше, ніж блоків ({b}): зменште кількість блоків."
+            df = (c - 1) * (b - 1)
+            return {"design": "augmented", "n_blocks": b, "standards": std, "n_new": n_new, "n_plots": n_new + c * b, "df": df,
+                    "hint": f"Ділянок: {n_new + c * b} ({n_new} нових + {c} стандарти × {b} блоків); ступенів свободи похибки {df}" + (" – замало, бажано ≥ 10" if df < 10 else "") + "."}
+        try: r = int(str(self._av["reps"].get()).strip())
+        except ValueError: return "Кількість повторностей – ціле число."
+        if r < 2: return "α-решітка потребує щонайменше 2 повторностей."
+        use_chk = bool(self._alpha_checks.get())
+        if use_chk and c < 1: return "Позначено «додати стандарти в кожен блок», але стандартів не обрано."
+        v = v_total - (c if use_chk else 0)
+        ok = D.valid_block_sizes(v, r)
+        sizes = ", ".join(f"{kk} ({ss} бл.)" for kk, ss in ok[:8]) if ok else "немає – змініть кількість номерів"
+        try: kb = int(str(self._alpha_k.get()).strip())
+        except ValueError: return f"α-решітка: вкажіть кількість ділянок у блоці k. Для {v} номерів можливі: {sizes}."
+        if kb < 2 or v % kb != 0 or v // kb < 2: return f"α-решітка: {v} номерів не діляться на блоки по {kb}. Можливі розміри блоку: {sizes}."
+        s_ = v // kb; n_plots = v * r + (c * s_ * r if use_chk else 0)
+        return {"design": "alpha", "k_block": kb, "s": s_, "r": r, "standards": std if use_chk else [], "n_plots": n_plots,
+                "hint": f"{v} номерів × {r} повторності; у кожній повторності {s_} блоків по {kb + (c if use_chk else 0)} ділянок; усього {n_plots} ділянок."}
 
     def _on_area_inputs_changed(self, *_):
         """Живе керування кроками площинної моделі: коректне введення на Кроці 2 одразу відкриває Крок 3 з підсумком; некоректне –
@@ -498,7 +569,12 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
             self._step4_frame.configure(text="Крок 4 — Зберегти схему (спочатку виконайте Крок 3)")
             self._set_step_enabled(self._step4_frame, False)
             return
-        if info["design"] == "latin":
+        if info["design"] in ("augmented", "alpha"):
+            mn = info["many"]
+            self._alpha_hint.configure(text=("⚠ " + info["many_err"]) if info["many_err"] else mn["hint"], fg="#c62828" if info["many_err"] else "#1a6b1a")
+            head = (f"✓ Розміри прийнято: {info['n_plots']} {_pl(info['n_plots'], 'ділянка', 'ділянки', 'ділянок')}" if mn else
+                    "✓ Розміри ділянки прийнято; параметри схеми для багатьох номерів задайте в Кроці 3")
+        elif info["design"] == "latin":
             head = (f"✓ Розміри прийнято: латинський квадрат {info['k']}×{info['k']} = {info['n_plots']} {_pl(info['n_plots'], 'ділянка', 'ділянки', 'ділянок')} "
                     f"(повторностей стільки, скільки комбінацій)")
         else:
@@ -590,6 +666,30 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
                     plan.append({"combo": combos[rows_p[r][cp[c]]],
                                 "row": r+1, "col": c+1, "rep": r+1})
 
+        elif design in ("augmented", "alpha"):
+            import sad_design_core as D
+            levels = self._entry_levels(); idx = {nm: i + 1 for i, nm in enumerate(levels)}
+            mp = self._many_layout_params(k)
+            if isinstance(mp, str): messagebox.showwarning("Схема", mp); return
+            try:
+                if design == "augmented":
+                    res = D.augmented_design([x for x in levels if x not in mp["standards"]], mp["standards"], mp["n_blocks"], seed)
+                    info = {"df": res["df"], "warnings": res["warnings"], "n_blocks": res["n_blocks"]}
+                else:
+                    ents = [x for x in levels if x not in mp["standards"]]
+                    res = D.alpha_design(ents, mp["k_block"], mp["r"], seed)
+                    lay = D.add_checks_to_layout(res["layout"], mp["standards"], seed) if mp["standards"] else res["layout"]
+                    res = dict(res, layout=lay); info = {"efficiency": res["efficiency"], "s": res["s"], "k_block": mp["k_block"], "warnings": []}
+            except Exception as ex:
+                messagebox.showwarning("Схема", str(ex)); return
+            blocks_per_rep = max(r_["block"] for r_ in res["layout"])
+            for r_ in res["layout"]:
+                row_ = r_["block"] if design == "augmented" else (r_["rep"] - 1) * blocks_per_rep + r_["block"]
+                plan.append({"combo": (idx[r_["entry"]],), "row": row_, "col": r_["plot"], "rep": r_["block"] if design == "augmented" else r_["rep"],
+                             "block": r_["block"], "kind": "standard" if r_["kind"] == "стандарт" else "new"})
+            reps = mp.get("r", mp.get("n_blocks"))
+            self._many_info = info
+
         elif design == "split":
             main_letter = self._area_split_main_var.get()
             main_idx = FACTOR_LETTERS.index(main_letter)
@@ -631,6 +731,11 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
             except ValueError:
                 pass
 
+        if design in ("augmented", "alpha"):
+            mi = getattr(self, "_many_info", {}) or {}
+            shortage_txt += ("\nα-решітка: A-ефективність {:.3f} відносно повних блоків.".format(mi["efficiency"]) if "efficiency" in mi else "") + \
+                            (f"\nАугментована схема: {mi.get('n_blocks')} блоків, ступенів свободи похибки {mi.get('df')}." if "df" in mi else "") + \
+                            "".join("\n⚠ " + w for w in mi.get("warnings", [])[:1])
         self._area_plan = {
             "plan": plan, "design": design, "design_name": design_name,
             "seed": seed, "k": k, "reps": reps, "pw": pw, "pl": pl,
@@ -651,6 +756,32 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
             self._area_split_main_frame.grid(row=1, column=0, columnspan=3, sticky="w", pady=(4,0))
         else:
             self._area_split_main_frame.grid_forget()
+        if design in ("augmented", "alpha"):
+            self._many_frame.grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+            self._aug_row.pack_forget(); self._alpha_row.pack_forget()                 # підказка завжди на місці – розміщуємо перед нею
+            (self._aug_row if design == "augmented" else self._alpha_row).pack(anchor="w", before=self._alpha_hint)
+            self._update_std_label()
+        else:
+            self._many_frame.grid_forget()
+
+    # ── стандарти й групи стиглості (зберігаються у схемі: cfg["standards"], cfg["groups"], cfg["group_std"]) ──
+    def _entry_levels(self):
+        return list(self.factor_defs[0]["levels"]) if len(self.factor_defs) == 1 else []
+
+    def _update_std_label(self):
+        st = [x for x in self._std_cfg.get("standards", []) if x in self._entry_levels()]
+        ng = len(set(self._std_cfg.get("groups", {}).values()))
+        self._std_lbl.configure(text=(f"стандарти: {len(st)} ({', '.join(st[:3])}{' …' if len(st) > 3 else ''})" if st else "стандартів не обрано") + (f"; груп: {ng}" if ng else ""),
+                                fg="#1a4b8c" if st else "#8c5a1a")
+
+    def _open_standards(self):
+        levels = self._entry_levels()
+        if not levels:
+            messagebox.showwarning("Стандарти", "Схеми для багатьох номерів – для одного фактора (сорт, гібрид, номер). Залиште в Кроці 1 один фактор."); return
+        StandardsDialog(self.win, levels, self._std_cfg, self._set_std_cfg)
+
+    def _set_std_cfg(self, cfg):
+        self._std_cfg = cfg; self._update_std_label(); self._on_area_inputs_changed()
 
     def _set_pending_action(self, action, status_text):
         """Зберігає налаштовану дію (не виконуючи одразу) і показує кнопку
@@ -1887,6 +2018,7 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
                 hp.replication = p["rep"]
                 hp.factors = {self.factor_defs[i]["name"]: combo[i]
                               for i in range(len(self.factor_defs))}
+                hp.block = p.get("block"); hp.kind = p.get("kind")
                 plants.append(hp)
             area_extra = {
                 "model": "area",
@@ -1897,6 +2029,8 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
                 "border": self._area_plan["border"],
                 "buffer_between": self._area_plan["buffer_between"],
                 "seed": self._area_plan["seed"],
+                **({"many_params": {"n_blocks": self._aug_blocks.get(), "k_block": self._alpha_k.get(), "alpha_checks": bool(self._alpha_checks.get())}}
+                   if self._area_plan["design"] in ("augmented", "alpha") else {}),
             }
         else:
             if not self._table_built:
@@ -1940,15 +2074,24 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
             "cfg": {"trait_name": getattr(self, "_trait_name", ""),
                     "trait_unit": getattr(self, "_trait_unit", ""),
                     **area_extra,
-                    **({"qr": dict(self._qr_settings)} if self._qr_settings else {})},
+                    **({"qr": dict(self._qr_settings)} if self._qr_settings else {}),
+                    **self._std_cfg_for_save()},
             "factor_defs": self.factor_defs,
             "variant_names": [],
             "plants": [{"row": p.row, "position": p.position, "value": p.value,
                        "status": p.status, "role": p.role, "plot_id": p.plot_id,
                        "variant": p.variant, "replication": p.replication,
-                       "factors": p.factors} for p in plants],
+                       "factors": p.factors, "block": p.block, "kind": p.kind} for p in plants],
         }
         return d
+
+    def _std_cfg_for_save(self):
+        """Стандарти й групи стиглості для файла схеми (назви рівнів фактора номерів)."""
+        lv = self._entry_levels() or [x for fd in self.factor_defs[:1] for x in fd["levels"]]
+        st = [x for x in self._std_cfg.get("standards", []) if x in lv]
+        gr = {c: g for c, g in self._std_cfg.get("groups", {}).items() if c in lv and g}
+        gs = {g: c for g, c in self._std_cfg.get("group_std", {}).items() if c in lv}
+        return {"standards": st, "groups": gr, "group_std": gs} if (st or gr) else {}
 
     def _open_qr_dialog(self):
         """QR-таблички для ділянок готової схеми (обидві моделі)."""
@@ -2006,6 +2149,7 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
 
         cfg = d.get("cfg", {})
         self._qr_settings = dict(cfg.get("qr") or {})
+        self._std_cfg = {"standards": list(cfg.get("standards") or []), "groups": dict(cfg.get("groups") or {}), "group_std": dict(cfg.get("group_std") or {})}
         self._last_design_used = cfg.get("design_used", "custom")
         self._last_split_main_idx = cfg.get("split_main_idx")
         self._trait_name = cfg.get("trait_name", "")
@@ -2035,6 +2179,10 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
             if self._last_split_main_idx is not None and self._last_split_main_idx < len(FACTOR_LETTERS):
                 self._area_split_main_var.set(FACTOR_LETTERS[self._last_split_main_idx])
             self._av_seed.set(str(cfg.get("seed", 2024)))
+            mpar = cfg.get("many_params") or {}
+            if mpar:
+                self._aug_blocks.set(str(mpar.get("n_blocks", "5"))); self._alpha_k.set(str(mpar.get("k_block", ""))); self._alpha_checks.set(bool(mpar.get("alpha_checks", False)))
+            self._update_std_label()
 
             # Відновлюємо self._area_plan з фактичних даних, щоб Крок 4
             # одразу розблокувався і повторне збереження працювало без
@@ -2044,7 +2192,7 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
                 factors_d = pd.get("factors") or {}
                 combo = tuple(factors_d.get(fd["name"], 1) for fd in self.factor_defs)
                 plan.append({"combo": combo, "row": pd["row"], "col": pd["position"],
-                            "rep": pd.get("replication", 1)})
+                            "rep": pd.get("replication", 1), "block": pd.get("block"), "kind": pd.get("kind")})
             pw = cfg.get("pw", 5); pl = cfg.get("pl", 10)
             border = cfg.get("border", 0.5); buf = cfg.get("buffer_between", 0.5)
             net_w = pw - 2*border; net_l = pl - 2*border
@@ -2123,3 +2271,66 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
                     txt = ""
                 self.entries[ri][j].insert(0, txt)
         messagebox.showinfo("Відкрито", f"Схему завантажено:\n{path}")
+
+
+class StandardsDialog:
+    """Стандарти (контролі) і групи стиглості для номерів досліду. Стандарти – повторюються в кожному блоці аугментованої схеми,
+    з ними порівнюються номери в аналізах (тест Даннетта, фенологія). Групи стиглості – щоб номер порівнювався зі стандартом своєї групи."""
+    def __init__(self, parent, levels, cfg, on_ok):
+        self.levels = list(levels); self.on_ok = on_ok
+        self.std = [x for x in cfg.get("standards", []) if x in self.levels]; self.groups = {c: g for c, g in cfg.get("groups", {}).items() if c in self.levels}
+        self.win = tk.Toplevel(parent); self.win.title("Стандарти й групи стиглості"); self.win.geometry("760x560"); self.win.transient(parent); set_icon(self.win)
+        rf = ("Times New Roman", 11)
+        tk.Label(self.win, text="Виділіть номери в списку (Ctrl, Shift – кілька) і позначте їх стандартами або призначте групу стиглості. "
+                 "Кожна група порівнюється зі стандартом із цієї ж групи.", font=("Times New Roman", 9), fg="#555", wraplength=720, justify="left").pack(anchor="w", padx=10, pady=(8, 4))
+        body = tk.Frame(self.win); body.pack(fill=tk.BOTH, expand=True, padx=10)
+        self.tv = ttk.Treeview(body, columns=("n", "s", "g"), show="headings", selectmode="extended")
+        for c_, t_, w_ in (("n", "Номер (сорт, гібрид)", 300), ("s", "Стандарт", 90), ("g", "Група", 140)): self.tv.heading(c_, text=t_); self.tv.column(c_, width=w_)
+        sb = ttk.Scrollbar(body, command=self.tv.yview); self.tv.configure(yscrollcommand=sb.set); self.tv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True); sb.pack(side=tk.LEFT, fill=tk.Y)
+        side = tk.Frame(body, padx=10); side.pack(side=tk.LEFT, fill=tk.Y)
+        tk.Button(side, text="⭐ Позначити стандартом", font=rf, command=lambda: self.mark(True)).pack(fill=tk.X, pady=2)
+        tk.Button(side, text="Зняти позначку стандарту", font=rf, command=lambda: self.mark(False)).pack(fill=tk.X, pady=2)
+        tk.Label(side, text="Група для виділених:", font=rf).pack(anchor="w", pady=(12, 0))
+        self.gv = tk.StringVar(value="ранні"); ttk.Combobox(side, textvariable=self.gv, values=["ранні", "середні", "пізні", "ультраранні", "пізньостиглі"], width=20).pack(anchor="w")
+        tk.Button(side, text="Призначити групу", font=rf, command=self.assign).pack(fill=tk.X, pady=2)
+        tk.Button(side, text="Прибрати групу", font=rf, command=lambda: self.assign("")).pack(fill=tk.X, pady=2)
+        self.msg = tk.Label(self.win, text="", font=("Times New Roman", 10), fg="#8c5a1a", anchor="w", justify="left", wraplength=720); self.msg.pack(fill=tk.X, padx=10)
+        bt = tk.Frame(self.win); bt.pack(fill=tk.X, padx=10, pady=8)
+        tk.Button(bt, text="OK", font=("Times New Roman", 11, "bold"), bg="#1a6b1a", fg="white", width=12, command=self.ok).pack(side=tk.RIGHT, padx=4)
+        tk.Button(bt, text="Скасувати", font=rf, width=12, command=self.win.destroy).pack(side=tk.RIGHT)
+        self._fill()
+
+    def _fill(self):
+        sel = {self.tv.item(i, "values")[0] for i in self.tv.selection()}; self.tv.delete(*self.tv.get_children())
+        for c in self.levels:
+            iid = self.tv.insert("", tk.END, values=(c, "⭐" if c in self.std else "", self.groups.get(c, "")))
+            if c in sel: self.tv.selection_add(iid)
+
+    def _sel(self): return [self.tv.item(i, "values")[0] for i in self.tv.selection()]
+
+    def mark(self, on, names=None):
+        names = names if names is not None else self._sel()
+        for c in names:
+            if on and c not in self.std: self.std.append(c)
+            if not on and c in self.std: self.std.remove(c)
+        self._fill(); self.msg.configure(text=f"Стандартів: {len(self.std)}.", fg="#1a6b1a")
+
+    def assign(self, group=None, names=None):
+        g = (self.gv.get() if group is None else group).strip(); names = names if names is not None else self._sel()
+        for c in names:
+            if g: self.groups[c] = g
+            else: self.groups.pop(c, None)
+        self._fill()
+
+    def group_standards(self):
+        """{група: стандарт} – перший позначений стандарт кожної групи."""
+        out = {}
+        for c in self.std:
+            g = self.groups.get(c)
+            if g and g not in out: out[g] = c
+        return out
+
+    def ok(self):
+        gs = self.group_standards(); no_std = sorted({g for g in self.groups.values() if g and g not in gs})
+        if no_std and not messagebox.askyesno("Групи без стандарту", f"Групи без стандарту: {', '.join(no_std)}. Їх номери порівнюватимуться із загальним стандартом. Продовжити?", parent=self.win): return
+        self.win.destroy(); self.on_ok({"standards": list(self.std), "groups": dict(self.groups), "group_std": gs})

@@ -39,6 +39,7 @@ def load_journal_file(parent):
         p.variant = pd.get("variant")
         p.replication = pd.get("replication")
         p.factors = pd.get("factors", {})
+        p.block = pd.get("block"); p.kind = pd.get("kind")
         plants.append(p)
 
     records = d.get("records", {})
@@ -49,6 +50,15 @@ def load_journal_file(parent):
     return {"plants": plants, "factor_defs": d.get("factor_defs", []),
             "variant_names": d.get("variant_names", []), "records": records,
             "path": path}
+
+
+import sad_phenology as _P
+
+
+def _parse_phase_date(raw, year=None):
+    """Значення показника «дата фенофази» → date або None (зберігається як «дд.мм.рррр»)."""
+    d_, _m = _P.parse_date_flex(str(raw), year or 2000)
+    return d_
 
 
 def aggregate_journal_data(plants, factor_defs, variant_names, records, record_names):
@@ -84,16 +94,75 @@ def aggregate_journal_data(plants, factor_defs, variant_names, records, record_n
             row["Варіант"] = vname
         for rn in record_names:
             vals_dict = records.get(rn, {}).get("values", {})
+            is_date = records.get(rn, {}).get("kind") == "date"
             vals = []
             for p in plist:
                 vkey = f"{p.row}:{p.position}"
                 raw = vals_dict.get(vkey)
                 if raw is None or str(raw).strip() == "": continue
+                if is_date:                                       # дата фенофази → номер дня року (нормований: високосні роки узгоджено)
+                    d_ = _parse_phase_date(raw)
+                    if d_ is not None: vals.append(float(_P.doy_norm(d_)))
+                    continue
                 try: vals.append(float(str(raw).replace(",",".")))
                 except ValueError: pass
             row[rn] = round(sum(vals)/len(vals), 4) if vals else None
         rows.append(row)
     return factor_cols, rows
+
+
+def plot_table_from_journal(years_json, record_names):
+    """Журнали за роками → одна ділянка = один рядок: рік, номер (сорт/гібрид – рівень відповідного фактора або назва варіанта),
+    повторність, неповний блок, тип («standard»/«new»/None) і значення показників (рослини ділянки усереднюються; дата фенофази →
+    номер дня року). → (rows, info) де info = {years, standards, groups, group_std, has_blocks, design}."""
+    import sad_phenology_journal as PJ
+    rows = []; info = {"years": [], "standards": [], "groups": {}, "group_std": {}, "has_blocks": False, "design": None}
+    for ys in sorted(years_json, key=lambda x: int(x)):
+        d = years_json[ys]; y = int(ys); fdefs = d.get("factor_defs") or []; vnames = d.get("variant_names") or []; fi = PJ._cultivar_factor(fdefs)
+        cfg = d.get("cfg") or {}; info["years"].append(y); info["design"] = info["design"] or cfg.get("design_used")
+        for c in cfg.get("standards") or []:
+            if c not in info["standards"]: info["standards"].append(c)
+        info["groups"].update(cfg.get("groups") or {}); info["group_std"].update(cfg.get("group_std") or {})
+        recs = d.get("records") or {}; plots = {}
+        for pl in d.get("plants") or []:
+            if pl.get("role") != HP_ROLE_RECORDED: continue
+            name = PJ._name_of(pl, fdefs, vnames, fi)
+            if not name: continue
+            key = (name, pl.get("replication"), pl.get("block"))
+            plots.setdefault(key, {"kind": pl.get("kind"), "keys": []})["keys"].append(f"{pl['row']}:{pl['position']}")
+        for (name, rep_, blk), pv in plots.items():
+            row = {"year": y, "entry": name, "rep": rep_, "block": blk, "kind": pv["kind"]}
+            if blk is not None: info["has_blocks"] = True
+            for rn in record_names:
+                r = recs.get(rn) or {}; vals = []
+                for k in pv["keys"]:
+                    raw = (r.get("values") or {}).get(k)
+                    if raw is None or str(raw).strip() == "": continue
+                    if r.get("kind") == "date":
+                        dd = _parse_phase_date(raw, y)
+                        if dd is not None: vals.append(float(_P.doy_norm(dd)))
+                    else:
+                        try: vals.append(float(str(raw).replace(",", ".")))
+                        except ValueError: pass
+                row[rn] = sum(vals) / len(vals) if vals else None
+            rows.append(row)
+    rows.sort(key=lambda r: (r["year"], r["rep"] if r["rep"] is not None else 0, r["block"] if r["block"] is not None else 0, r["entry"]))
+    return rows, info
+
+
+def open_journal_plots(parent, multi_select=True):
+    """Діалог: файл схеми/журналу → вибір показників → (rows, chosen, info) для таблиць «ділянка – рядок»; None – скасовано."""
+    found = _find_scheme_folder_and_years(parent, title="Оберіть файл схеми або журналу будь-якого року")
+    if not found: return None
+    years_json = found[1]; allrec = {}
+    for yd in years_json.values():
+        for nm, r in (yd.get("records") or {}).items(): allrec.setdefault(nm, r)
+    if not allrec:
+        messagebox.showwarning("Немає обліків", "У журналах цієї схеми ще немає жодного показника.", parent=parent); return None
+    chosen = pick_indicators_dialog(parent, allrec, multi_select=multi_select)
+    if not chosen: return None
+    rows, info = plot_table_from_journal(years_json, chosen)
+    return rows, chosen, info
 
 
 def aggregate_to_variant_level(factor_cols, rows, record_names):
@@ -300,6 +369,7 @@ def _plants_from_saved(plants_data):
         p.role = pd.get("role", HP_ROLE_UNASSIGNED)
         p.plot_id = pd.get("plot_id"); p.variant = pd.get("variant")
         p.replication = pd.get("replication"); p.factors = pd.get("factors", {})
+        p.block = pd.get("block"); p.kind = pd.get("kind")
         plants.append(p)
     return plants
 
@@ -557,6 +627,16 @@ class FieldJournalWindow:
 ДРУК
   «🖨 Друкувати бланк» — та сама схема, але порожня, з місцем для
   запису значень від руки в полі (як в модулі планування).
+
+ФЕНОФАЗИ (СОРТОВИВЧЕННЯ)
+  «🌸 Фенофаза…» – облік дати настання фази: оберіть культуру й фазу
+  за шкалою BBCH (з'явиться критерій настання). У клітинку кожної
+  облікової рослини чи ділянки впишіть дату: 12.05, 1205, «12 травня»,
+  «т» – сьогодні; вона перетвориться на дд.мм.рррр. Червона клітинка –
+  не схоже на дату (не зберігається), оранжева – дата з іншого року.
+  Фенофази зберігаються поряд із ростовими показниками й урожайністю.
+  В аналізах (ANOVA тощо) дата стає номером дня року; модуль
+  «Фенологічні фази» переносить усі роки кнопкою «📂 З польового журналу…».
 """
 
     def __init__(self, parent, gs=None):
@@ -581,6 +661,7 @@ class FieldJournalWindow:
         self._series = {}  # {базова_назва: {"interval_days":N, "rounds":[{"date":,"indicator":}]}}
                                         # — сама схема (без даних), для старту нового року
         self._entry_widgets = {}   # (row,position) -> tk.Entry (лише для облікових)
+        self._pending_meta = None   # новий показник типу «дата фенофази» до першого збереження: {kind, preset, phase_key, bbch, phase_name}
         self._build()
 
     # ─────────────────────────────────────────────────────
@@ -606,6 +687,7 @@ class FieldJournalWindow:
         self._record_cb.bind("<<ComboboxSelected>>",
                              lambda e: self._switch_record(self._record_var.get()))
 
+        tk.Button(top, text="🌸 Фенофаза…", font=rf, command=self._new_phase_indicator).pack(side=tk.LEFT, padx=(6, 2))
         tk.Button(top, text="💾 Зберегти показник", bg="#1a6b1a", fg="white",
                   font=rf, command=self._save_indicator).pack(side=tk.LEFT, padx=(16,4))
         tk.Button(top, text="🖨 Друкувати бланк", font=rf,
@@ -784,6 +866,7 @@ class FieldJournalWindow:
             p.role = pd.get("role", HP_ROLE_UNASSIGNED)
             p.plot_id = pd.get("plot_id"); p.variant = pd.get("variant")
             p.replication = pd.get("replication"); p.factors = pd.get("factors", {})
+            p.block = pd.get("block"); p.kind = pd.get("kind")
             plants.append(p)
         self.plants = plants
         self.cfg = src.get("cfg", {})
@@ -864,6 +947,55 @@ class FieldJournalWindow:
             + "\n".join(lines))
 
     # ── Керування показниками ──────────────────────────────
+    def _is_date_ind(self):
+        """Поточний показник – дата фенофази (новий із «🌸 Фенофаза…» або збережений з типом «date»)."""
+        if self._pending_meta: return True
+        return bool(self._current_indicator_name and self.records.get(self._current_indicator_name, {}).get("kind") == "date")
+
+    def _new_phase_indicator(self, preset=None, phase_key=None):
+        """Новий показник «дата фенофази»: культура й фаза – за шкалою BBCH (ті самі набори, що й у модулі фенології).
+        Якщо цю фазу вже обліковано цього року – відкривається наявний показник."""
+        if not self.plants:
+            messagebox.showwarning("", "Спочатку відкрийте схему."); return
+        if preset is None:
+            dlg = tk.Toplevel(self.win); dlg.title("Облік фенофази"); dlg.resizable(False, False); set_icon(dlg); dlg.grab_set(); out = {}
+            frm = tk.Frame(dlg, padx=14, pady=12); frm.pack()
+            tk.Label(frm, text="Культура:", font=("Times New Roman", 11)).grid(row=0, column=0, sticky="w", pady=3)
+            names = {_P.PRESETS[k]["name"]: k for k in _P.PRESET_ORDER if _P.PRESETS[k]["phases"]}
+            last = getattr(self, "_last_phase_preset", "pome"); cv_ = tk.StringVar(value=_P.PRESETS[last]["name"])
+            ttk.Combobox(frm, textvariable=cv_, values=list(names), state="readonly", width=46).grid(row=0, column=1, padx=8, pady=3)
+            tk.Label(frm, text="Фаза:", font=("Times New Roman", 11)).grid(row=1, column=0, sticky="w", pady=3)
+            pv_ = tk.StringVar(); pcb = ttk.Combobox(frm, textvariable=pv_, state="readonly", width=46); pcb.grid(row=1, column=1, padx=8, pady=3)
+            hint = tk.Label(frm, text="", font=("Times New Roman", 9), fg="#555", wraplength=420, justify="left"); hint.grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 6))
+            def fill(*_):
+                ph = _P.PRESETS[names[cv_.get()]]["phases"]; pcb.configure(values=[_P.phase_label(x) for x in ph])
+                if pv_.get() not in pcb.cget("values"): pv_.set(pcb.cget("values")[0])
+                show()
+            def show(*_):
+                ph = {_P.phase_label(x): x for x in _P.PRESETS[names[cv_.get()]]["phases"]}; x = ph.get(pv_.get())
+                hint.configure(text=_P.phase_hint(x) if x else "")
+            cv_.trace_add("write", fill); pv_.trace_add("write", show); fill()
+            def ok():
+                ph = {_P.phase_label(x): x for x in _P.PRESETS[names[cv_.get()]]["phases"]}
+                out.update(preset=names[cv_.get()], phase_key=ph[pv_.get()]["key"]); dlg.destroy()
+            tk.Button(frm, text="OK", font=("Times New Roman", 11, "bold"), bg="#1a6b1a", fg="white", width=10, command=ok).grid(row=3, column=1, sticky="e", padx=8)
+            dlg.wait_window(dlg)
+            if not out: return
+            preset, phase_key = out["preset"], out["phase_key"]
+        ph = next(x for x in _P.PRESETS[preset]["phases"] if x["key"] == phase_key); self._last_phase_preset = preset
+        label = _P.phase_label(ph)
+        if label in self.records:                          # уже обліковується – просто відкриваємо
+            self._record_var.set(label); self._switch_record(label); return
+        if self._working_values and not messagebox.askyesno("Незбережені зміни", "У поточній таблиці є незбережені дані – новий показник їх замінить. Продовжити?"):
+            return
+        self._working_values = {}; self._current_indicator_name = None
+        self._pending_meta = {"kind": "date", "preset": preset, "phase_key": ph["key"], "bbch": ph.get("bbch", ""), "phase_name": ph["name"]}
+        try: self._record_var.set("(новий показник)")
+        except Exception: pass
+        self._build_grid()
+        messagebox.showinfo("Облік фенофази", f"Фенофаза «{label}».\n{_P.phase_hint(ph)}\n\nВводьте дату настання в клітинку кожної ділянки (рослини): 12.05, 1205, «12 травня», «т» – сьогодні. "
+                            "Після введення натисніть «💾 Зберегти показник».")
+
     def _switch_record(self, name):
         if self._working_values and (
                 self._current_indicator_name is None or
@@ -875,6 +1007,7 @@ class FieldJournalWindow:
                 # повернути вибір комбобоксу на попередній показник
                 self._record_var.set(self._current_indicator_name or "(новий показник)")
                 return
+        self._pending_meta = None
         if name == "(новий показник)":
             self._working_values = {}
             self._current_indicator_name = None
@@ -983,6 +1116,19 @@ class FieldJournalWindow:
             self._reclassify_as_dead(row, pos)
             if key in self._working_values: del self._working_values[key]
             self._build_grid()
+            return
+        if txt and self._is_date_ind():                   # дата фенофази: гнучкий розбір, нормалізація до дд.мм.рррр
+            try: yr = int(self._current_year)
+            except (TypeError, ValueError): yr = __import__("datetime").date.today().year
+            d_, msg = _P.parse_date_flex(txt, yr)
+            if d_ is None:
+                e.configure(bg="#ffcdd2")
+                if key in self._working_values: del self._working_values[key]
+                return
+            norm = _P.fmt_date(d_)
+            if txt != norm: e.delete(0, tk.END); e.insert(0, norm)
+            e.configure(bg="#fff3e0" if d_.year != yr else "white")
+            self._working_values[key] = norm
             return
         if txt:
             if self._looks_like_typo(key, txt, e):
@@ -1169,14 +1315,15 @@ class FieldJournalWindow:
                  ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,8))
         tk.Label(frm, text="Назва показника (напр. «Урожайність»):",
                  font=("Times New Roman",11)).grid(row=1, column=0, sticky="w", pady=4)
-        name_v = tk.StringVar(value=self._current_indicator_name or "")
+        pm = self._pending_meta
+        name_v = tk.StringVar(value=self._current_indicator_name or (_P.phase_label({"name": pm["phase_name"], "bbch": pm.get("bbch", "")}) if pm else ""))
         tk.Entry(frm, textvariable=name_v, width=30, font=("Times New Roman",11)
                  ).grid(row=1, column=1, sticky="w", padx=8)
         tk.Label(frm, text="Одиниця виміру:", font=("Times New Roman",11)
                  ).grid(row=2, column=0, sticky="w", pady=4)
         existing_unit = (self.records.get(self._current_indicator_name, {}).get("unit","")
                          if self._current_indicator_name else "")
-        unit_v = tk.StringVar(value=existing_unit)
+        unit_v = tk.StringVar(value=existing_unit or ("дата" if self._is_date_ind() else ""))
         tk.Entry(frm, textvariable=unit_v, width=15, font=("Times New Roman",11)
                  ).grid(row=2, column=1, sticky="w", padx=8)
 
@@ -1332,7 +1479,10 @@ class FieldJournalWindow:
                             parent=dlg):
                         return
 
-            self.records[nm] = {"unit": unit_v.get().strip(), "values": dict(self._working_values)}
+            old_rec = self.records.get(nm) or self.records.get(self._current_indicator_name or "", {}) or {}
+            meta = self._pending_meta or {k_: v_ for k_, v_ in old_rec.items() if k_ in ("kind", "preset", "phase_key", "bbch", "phase_name")}
+            self.records[nm] = {"unit": unit_v.get().strip(), "values": dict(self._working_values), **meta}
+            self._pending_meta = None
             if is_series:
                 self._series.setdefault(base_name, {"interval_days": interval_days, "rounds": []})
                 self._series[base_name]["interval_days"] = interval_days
@@ -1376,7 +1526,7 @@ class FieldJournalWindow:
                 "row": p.row, "position": p.position, "value": p.value,
                 "status": p.status, "role": p.role, "plot_id": p.plot_id,
                 "variant": p.variant, "replication": p.replication,
-                "factors": p.factors,
+                "factors": p.factors, "block": p.block, "kind": p.kind,
             })
         d = {
             "type": "field_journal", "version": APP_VER, "year": self._current_year,

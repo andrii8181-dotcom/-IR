@@ -106,7 +106,7 @@ def build_experiment(scheme, exp_id, name="", origin="", created=None):
         vcode = "".join(f"{FACTOR_LETTERS[i]}{idxs[i]}" for i in range(len(idxs)))
         variants.append({"n": n, "code": vcode, "idxs": list(idxs), "levels": [fdefs[i]["levels"][idxs[i] - 1] for i in range(len(idxs))]})
         var_no[idxs] = n
-    groups = {}; skipped = 0; grid_rows = {}
+    groups = {}; skipped = 0; grid_rows = {}; std_groups = set()
     for p in scheme.get("plants", []):
         row, pos = int(p["row"]), int(p["position"]); rec = p.get("role") == "recorded"
         if not rec:
@@ -116,6 +116,7 @@ def build_experiment(scheme, exp_id, name="", origin="", created=None):
         except (KeyError, TypeError, ValueError): skipped += 1; continue
         if any(not (1 <= i <= k) for i, k in zip(idxs, nlev)): skipped += 1; continue
         groups.setdefault((int(p.get("replication") or 1), idxs), []).append((row, pos))
+        if p.get("kind") == "standard": std_groups.add((int(p.get("replication") or 1), idxs))
     if not groups: raise ValueError("У схемі немає жодної облікової ділянки (рядків з кодами факторів).")
     ordered = sorted(groups.items(), key=lambda kv: (min(kv[1]), kv[0][0], var_no[kv[0][1]]))
     plots = []
@@ -123,7 +124,7 @@ def build_experiment(scheme, exp_id, name="", origin="", created=None):
         segs = _segments(cells); v = var_no[idxs]
         plots.append({"plot": no, "rep": rep, "variant": v, "vcode": variants[v - 1]["code"], "levels": variants[v - 1]["levels"],
                       "row": segs[0][0], "segments": segs, "units": len(cells), "pos_text": _pos_text(segs, len(cells)),
-                      "left": None, "right": None})
+                      "left": None, "right": None, "std": (rep, idxs) in std_groups})
         for r, a, b in segs:
             for q in range(a, b + 1): grid_rows.setdefault(r, {})[q] = ("plot", no)
     by_row = {}
@@ -138,7 +139,7 @@ def build_experiment(scheme, exp_id, name="", origin="", created=None):
     exp = {"id": exp_id, "name": name.strip(), "created": created or _dt.date.today().isoformat(), "model": cfg.get("model", "plant"),
            "design": cfg.get("design_used", ""), "origin": origin.strip(), "signature": sig, "n_plots": len(plots), "n_variants": len(variants),
            "n_reps": max(pl["rep"] for pl in plots), "factors": [{"letter": FACTOR_LETTERS[i], "name": fd["name"], "levels": list(fd["levels"])} for i, fd in enumerate(fdefs)],
-           "trait": cfg.get("trait_name", ""), "per_plot_units": 1 if cfg.get("model") == "area" else max(pl["units"] for pl in plots)}
+           "trait": cfg.get("trait_name", ""), "rep_word": "Блок" if cfg.get("design_used") == "augmented" else "Повторність", "per_plot_units": 1 if cfg.get("model") == "area" else max(pl["units"] for pl in plots)}
     for pl in plots: pl["payload"], pl["tier"] = "", ""
     grid = {r: dict(sorted(c.items())) for r, c in sorted(grid_rows.items())}
     return {"exp": exp, "variants": variants, "plots": plots, "grid": grid, "skipped": skipped}
@@ -174,7 +175,7 @@ def payload_tiers(exp, pl, style="descriptive"):
     mach = machine_line(exp, pl)
     if style == "compact": return [("min", mach)]
     L1 = f"Дослід {exp['id']}"
-    L2 = f"Повторність {pl['rep']} · Варіант {pl['variant']} ({pl['vcode']})"
+    L2 = f"{exp.get('rep_word', 'Повторність')} {pl['rep']} · Варіант {pl['variant']} ({pl['vcode']})" + (" · СТАНДАРТ" if pl.get("std") else "")
     L3 = _short(" + ".join(pl["levels"]), 56)
     L4 = f"№{pl['plot']} з {exp['n_plots']} · {_short(pl['pos_text'], 34)}"
     named = L1 + (f" · {_short(exp['name'], 24)}" if exp["name"] else "")
@@ -386,7 +387,7 @@ def label_prims(data, pl, key, qr, opts=None):
     prims = [("rect", 0, 0, w, h, "#ffffff", "#9a9a9a", 0.15)]
     band = 5.0 * k
     prims += [("rect", 0, 0, w, band, col, None, 0),
-              ("text", 1.8 * k, band * 0.72, f"ДОСЛІД {exp['id']}", fit_size(f"ДОСЛІД {exp['id']}", 7.5 * k, w * 0.5, True), True, "l", fg),
+              ("text", 1.8 * k, band * 0.72, f"ДОСЛІД {exp['id']}" + (" · СТАНДАРТ" if pl.get("std") else ""), fit_size(f"ДОСЛІД {exp['id']}" + (" · СТАНДАРТ" if pl.get("std") else ""), 7.5 * k, w * 0.55, True), True, "l", fg),
               ("text", w - 1.8 * k, band * 0.72, f"№ {pl['plot']} з {exp['n_plots']}", fit_size(f"№ {pl['plot']} з {exp['n_plots']}", 7.5 * k, w * 0.42, True), True, "r", fg)]
     qs = P["qr"]; dpi = opts.get("snap_dpi")
     def qr_at(x, y, size):                                            # з прив'язкою до сітки точок принтера (рулонні етикетки)
@@ -401,7 +402,7 @@ def label_prims(data, pl, key, qr, opts=None):
         if k < 1.3:                                                   # мала табличка
             txt = f"П{pl['rep']} · В{pl['variant']}"; big = fit_size(txt, 19 * k, rw, True)
             y += big * PT * 0.85; prims.append(("text", rx, y, txt, big, True, "l", ink))
-            y += 3.5 * k; cap = f"повторність {pl['rep']} · варіант {pl['variant']}"
+            y += 3.5 * k; cap = f"{exp.get('rep_word', 'Повторність').lower()} {pl['rep']} · варіант {pl['variant']}"
             prims.append(("text", rx, y, cap, fit_size(cap, 6.0 * k, rw), False, "l", grey))
             y += 3.9 * k; prims.append(("text", rx, y, pl["vcode"], fit_size(pl["vcode"], 8.5 * k, rw, True), True, "l", ink))
             for ln in wrap_text(levels_short, 7.0 * k, rw, 2):
@@ -409,7 +410,7 @@ def label_prims(data, pl, key, qr, opts=None):
             pos = _short(pl["pos_text"], 40); prims.append(("text", rx, h - 1.5 * k, pos, fit_size(pos, 6.2 * k, rw), False, "l", grey))
             prims.append(("text", w - 1.2 * k, h - 1.5 * k, foot, 4.6 * k, False, "r", grey)) if tw(pos, 6.2 * k) + tw(foot, 4.6 * k) < rw - 1 else None
         else:                                                         # середня табличка
-            for txt, sz in ((f"Повторність {pl['rep']}", 13.5 * k), (f"Варіант {pl['variant']}", 20 * k)):
+            for txt, sz in ((f"{exp.get('rep_word', 'Повторність')} {pl['rep']}", 13.5 * k), (f"Варіант {pl['variant']}", 20 * k)):
                 sz = fit_size(txt, sz, rw, True); y += sz * PT * 0.95; prims.append(("text", rx, y, txt, sz, True, "l", ink)); y += 0.8 * k
             vt = f"код варіанта {pl['vcode']}"; y += 3.0 * k; prims.append(("text", rx, y, vt, fit_size(vt, 8.0 * k, rw, True), True, "l", ink))
             yb = h - 1.8 * k; limit = (yb - 8.6 * k if opts.get("neighbors", True) else yb - 4.4 * k) - 4.2 * k
@@ -423,7 +424,7 @@ def label_prims(data, pl, key, qr, opts=None):
         qx, qy, qs = qr_at((w - qs) / 2, band + 2.0 * k, qs)
         prims.append(("qr", qx, qy, qs, qr)); y = qy + qs + 1.0 * k
         prims.append(("text", w / 2, y + 2.8 * k, pl["code"], fit_size(pl["code"], 9.0 * k, w - 4, True), True, "c", ink)); y += 6.5 * k
-        for txt, sz in ((f"Повторність {pl['rep']} · Варіант {pl['variant']}", 13.5 * k),):
+        for txt, sz in ((f"{exp.get('rep_word', 'Повторність')} {pl['rep']} · Варіант {pl['variant']}", 13.5 * k),):
             sz = fit_size(txt, sz, w - 6 * k, True); y += sz * PT * 0.95; prims.append(("text", w / 2, y, txt, sz, True, "c", ink)); y += 1.0 * k
         vt = f"код варіанта {pl['vcode']}"; y += 2.6 * k; prims.append(("text", w / 2, y, vt, fit_size(vt, 8.5 * k, w - 6 * k, True), True, "c", ink))
         yb = h - 1.8 * k; limit = (yb - 8.6 * k if opts.get("neighbors", True) else yb - 4.4 * k) - 4.4 * k

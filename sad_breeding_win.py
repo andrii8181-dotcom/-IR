@@ -58,6 +58,8 @@ class GridWindow:
         sm.add_separator(); sm.add_command(label="🗑 Очистити таблицю", command=self._clear)
         mb["menu"] = sm
         tk.Button(top, text="Вставити з буфера", font=RF, command=self._paste).pack(side=tk.LEFT, padx=4)
+        if getattr(self, "JOURNAL", False):
+            tk.Button(top, text="📂 З польового журналу…", font=RF, command=self._from_journal).pack(side=tk.LEFT, padx=4)
         tk.Button(top, text="📚 Довідка", bg="#1a4b8c", fg="white", font=RF, command=self._show_help).pack(side=tk.LEFT, padx=4)
         self.opts = tk.Frame(self.win, padx=8); self.opts.pack(fill=tk.X)
         self.build_options(self.opts)
@@ -130,6 +132,24 @@ class GridWindow:
             for e in row: e.delete(0, tk.END)
 
     # ── дані ─────────────────────────────────────────────────
+    def fill_table(self, headers, rows):
+        """Заповнює таблицю програмно: заголовки й рядки (значення – текст або число; None – порожньо)."""
+        while len(self.header_entries) < len(headers): self._add_col()
+        for j, e in enumerate(self.header_entries):
+            e.delete(0, tk.END); e.insert(0, headers[j] if j < len(headers) else "")
+        while len(self.entries) < len(rows) + 2: self._make_row()
+        self._rebind()
+        for i, row in enumerate(self.entries):
+            for j, e in enumerate(row):
+                e.delete(0, tk.END)
+                if i < len(rows) and j < len(rows[i]) and rows[i][j] is not None:
+                    v = rows[i][j]; e.insert(0, (f"{v:.6g}" if isinstance(v, float) else str(v)))
+
+    def _journal_rows(self):
+        """Ділянки з журналу (усі роки) → (rows, chosen, info) або None."""
+        from sad_journal_trial import open_journal_plots
+        return open_journal_plots(self.win, multi_select=True)
+
     def header_names(self):
         return [e.get().strip() for e in self.header_entries]
 
@@ -284,6 +304,7 @@ class CombAbilityWindow(GridWindow):
 # Змішана модель (REML / BLUP)
 # ═══════════════════════════════════════════════════════════════
 class MixedWindow(GridWindow):
+    JOURNAL = True
     TITLE = "Змішана модель (REML / BLUP) — незбалансовані дані"
     HEADERS = ["Генотип", "Середовище", "Повторність", "Блок", "Ознака 1", "Ознака 2", "Ознака 3"]
     NUMERIC_FROM = 4; COL_W = 13
@@ -315,6 +336,18 @@ class MixedWindow(GridWindow):
 
     def after_build(self):
         self._refresh_traits()
+
+    def _from_journal(self, data=None):
+        """Ділянки з польового журналу: генотип, середовище (рік – якщо їх кілька), повторність, неповний блок, ознаки."""
+        res = data or self._journal_rows()
+        if not res: return
+        rows, chosen, info = res; multi = len(info["years"]) > 1
+        self.fill_table(["Генотип", "Середовище", "Повторність", "Блок"] + chosen,
+                        [[r["entry"], str(r["year"]) if multi else "", r["rep"], (f"{r['rep']}.{r['block']}" if r["block"] is not None else "")] + [r[c] for c in chosen] for r in rows])
+        self.mode_var.set("Серія дослідів (кілька середовищ)" if multi else "Один дослід"); self.blk_var.set(bool(info["has_blocks"]))
+        if info["standards"]: self.ctl_var.set("; ".join(info["standards"]))
+        self._refresh_traits()
+        if chosen: self.trait_var.set(chosen[0])
 
     def _refresh_traits(self):
         names = [h for h in self.header_names()[4:] if h]
@@ -604,6 +637,7 @@ class ScoresWindow(GridWindow):
 # Порівняння зі стандартом
 # ═══════════════════════════════════════════════════════════════
 class ControlWindow(GridWindow):
+    JOURNAL = True
     TITLE = "Порівняння зі стандартом (тест Дуннетта)"
     HEADERS = ["Номер (сорт)", "Повторність / блок", "Ознака 1", "Ознака 2", "Ознака 3"]
     NUMERIC_FROM = 2; COL_W = 18
@@ -636,6 +670,21 @@ class ControlWindow(GridWindow):
     def _refresh_entries(self):
         names = list(dict.fromkeys(r[0] for r in self.rows() if r[0]))
         self.ctl_cb.configure(values=names)
+
+    def _from_journal(self, data=None):
+        """Ділянки з польового журналу: номер, повторність/блок (для аугментованої схеми – блок), ознаки; стандарти – зі схеми."""
+        res = data or self._journal_rows()
+        if not res: return
+        rows, chosen, info = res; years = info["years"]
+        if len(years) > 1:
+            messagebox.showinfo("Польовий журнал", f"У журналі кілька років ({', '.join(map(str, years))}): для порівняння зі стандартом взято "
+                                f"останній рік {years[-1]}. Для серії років використайте «Змішану модель».", parent=self.win)
+            rows = [r for r in rows if r["year"] == years[-1]]
+        blk = lambda r: r["block"] if r["block"] is not None else r["rep"]
+        self.fill_table(["Номер (сорт)", "Повторність / блок"] + chosen, [[r["entry"], blk(r)] + [r[c] for c in chosen] for r in rows])
+        if info["standards"]: self.ctl_var.set("; ".join(info["standards"]))
+        self.blocks_var.set(True); self._refresh_traits(); self._refresh_entries()
+        if chosen: self.trait_var.set(chosen[0])
 
     def _refresh_traits(self):
         names = [h for h in self.header_names()[2:] if h]

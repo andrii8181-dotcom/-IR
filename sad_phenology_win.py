@@ -39,6 +39,11 @@ HELP = """
    групи (або вставити пари «сорт – група» з Excel; стовпчик «Група» читається й під час імпорту). Тоді різниця в днях, класи
    «ранній / середній / пізній» і тест Даннетта рахуються відносно стандарту своєї групи. Сорти без групи – відносно загального стандарту.
 
+3б. ДАНІ З ПОЛЬОВОГО ЖУРНАЛУ
+   Для досліду, побудованого конструктором схеми (сорти – рівні фактора «Сорт», повторності, етикетки з QR), фенофази зручно вносити
+   в польовому журналі кнопкою «🌸 Фенофаза…» – поряд із ростовими показниками й урожайністю. «📂 З польового журналу…» переносить
+   у цей модуль усі роки: сорти, повторності й дати (кілька рослин ділянки – медіана дат).
+
 4. ОБЛІК ЗА ВІЗИТАМИ
    Якщо у полі записували не дату, а відсоток рослин у фазі (на кожному візиті), «📋 Облік за візитами…» обчислює дату настання за
    порогом (наприклад, 10 % – початок, 50 % – масова, 90 % – кінець) лінійною інтерполяцією між візитами й вносить її в таблицю.
@@ -249,6 +254,7 @@ class PhenologyWindow:
         tbd = tk.Frame(w, padx=6, pady=2); tbd.pack(fill=tk.X); grp(tbd, "Дані:")
         tk.Button(tbd, text="Вставити з буфера", font=RF, command=self.paste_clipboard).pack(side=tk.LEFT, padx=2)
         tk.Button(tbd, text="📥 Excel…", font=RF, command=self.import_excel).pack(side=tk.LEFT, padx=2)
+        tk.Button(tbd, text="📂 З польового журналу…", font=RF, command=self.import_journal).pack(side=tk.LEFT, padx=2)
         tk.Button(tbd, text="📋 Облік за візитами…", font=RF, command=self.open_visits).pack(side=tk.LEFT, padx=2)
         sep(tbd); grp(tbd, "Додатково:")
         tk.Button(tbd, text="🌦 Погода…", font=RF, command=self.open_weather).pack(side=tk.LEFT, padx=2)
@@ -588,6 +594,29 @@ class PhenologyWindow:
             if ci_grp is not None and ci_grp < len(r) and str(r[ci_grp]).strip(): self.groups[name] = str(r[ci_grp]).strip()
         self._write_grid(self.years_data.get(self.cur_year, [])); self._update_years(); self._validate_all(); self._update_groups_label()
         return f"Прочитано рядків: {n}; років: {len(years_seen) or 1}; розпізнано фаз: {len(pmap)}." + (f"\nНе розпізнано стовпці: {', '.join(ignored)}." if ignored else "")
+
+    def import_journal(self, years_json=None):
+        """Фенофази з польового журналу схеми досліду (усі роки): сорти, повторності, дати; набір фаз – як у журналі."""
+        import sad_phenology_journal as PJ
+        if years_json is None:
+            from sad_journal_trial import _find_scheme_folder_and_years
+            found = _find_scheme_folder_and_years(self.win, title="Оберіть файл схеми або журналу будь-якого року")
+            if not found: return None
+            years_json = found[1]
+        try: res = PJ.from_journal_years(years_json)
+        except ValueError as e: messagebox.showinfo("Польовий журнал", str(e), parent=self.win); return None
+        self._save_current()
+        if any(r["dates"] for rows in self.years_data.values() for r in rows) and not messagebox.askyesno("Польовий журнал", "Поточні дані у вікні буде замінено даними журналу. Продовжити?", parent=self.win): return None
+        self.preset_key = res["preset"] if res["preset"] in P.PRESETS else "custom"; self.preset_var.set(P.PRESETS[self.preset_key]["name"]); self.phases = res["phases"]
+        self.years_data = res["years_data"] or {_dt.date.today().year: []}; self.cur_year = max(self.years_data)
+        if res.get("standards"): self.standard = res["standards"][0]; self.std_var.set(self.standard)
+        if res.get("groups"): self.groups = dict(res["groups"]); self.group_std = dict(res.get("group_std") or {})
+        self._update_groups_label()
+        self._write_grid(self.years_data[self.cur_year]); self._update_years(); self._validate_all()
+        msg = (f"З журналу перенесено: років {len(res['years_data'])}, сортів {len(res['cultivars'])} (фактор «{res['factor']}»), дат фенофаз {res['n_dates']}. "
+               "Кілька рослин ділянки зведено в одну дату (медіана).") + (f"\nСтандарт зі схеми: {res['standards'][0]}." if res.get("standards") else "") + \
+              (f" Групи стиглості: {len(set(res['groups'].values()))}." if res.get("groups") else "") + ("\n" + "\n".join(res["notes"]) if res["notes"] else "")
+        messagebox.showinfo("Польовий журнал", msg, parent=self.win); return res
 
     def export_excel(self, path=None):
         path = path or filedialog.asksaveasfilename(parent=self.win, defaultextension=".xlsx", initialfile="фенологія_дати.xlsx", filetypes=[("Excel", "*.xlsx")], title="Дати в Excel")

@@ -11,7 +11,7 @@ MODULES = ['sad_app', 'sad_assoc_core', 'sad_assoc_sections', 'sad_breeding', 's
            'sad_control_core', 'sad_corr_core', 'sad_corr_sections', 'sad_correlation', 'sad_descriptive_ttest', 'sad_design_core',
            'sad_design_sections', 'sad_gencorr_core', 'sad_gencorr_sections', 'sad_gxe_core', 'sad_het_ord_sections',
            'sad_heterosis_core', 'sad_homogeneous', 'sad_journal_trial', 'sad_manova', 'sad_mixed_core', 'sad_mixed_sections',
-           'sad_ordinal_core', 'sad_phenology', 'sad_phenology_dialogs', 'sad_phenology_results', 'sad_phenology_win', 'sad_qr_dialog', 'sad_qrlabels', 'sad_regression', 'sad_report', 'sad_repeated', 'sad_scheme_constructor', 'sad_selection_core',
+           'sad_ordinal_core', 'sad_phenology', 'sad_phenology_dialogs', 'sad_phenology_journal', 'sad_phenology_results', 'sad_phenology_win', 'sad_qr_dialog', 'sad_qrlabels', 'sad_regression', 'sad_report', 'sad_repeated', 'sad_scheme_constructor', 'sad_selection_core',
            'sad_selection_sections', 'sad_stability_ancova', 'sad_weather', 'sad_weather_charts', 'sad_weather_core', 'sad_weather_export', 'sad_weather_indices', 'sad_worldmap']
 WINDOWS = ["CorrelationWindow", "DescriptiveWindow", "TTestWindow", "RegressionWindow", "ClusterWindow", "PCAWindow",
            "RepeatedMeasuresWindow", "MixedRepeatedWindow", "StabilityWindow", "AncovaWindow", "ManovaWindow", "FieldJournalWindow",
@@ -115,6 +115,12 @@ def run(main_module, out_path=None):
             _r = PH.compare_means(ctx["records"], "bloom0", an, _m, "A"); assert _r["groups"] and "error" not in _r, _m
         assert PH.scott_knott({"a": 0.0, "b": 0.1, "c": 20.0, "d": 20.1}, 0.25, 12, 3)["a"] == 0 and abs(PH.holm_adjust([0.01, 0.04, 0.03])[1] - 0.06) < 1e-12
         assert PH.onset_from_visits([(_d.date(2026, 5, 1), 0), (_d.date(2026, 5, 5), 20), (_d.date(2026, 5, 9), 80)], 50)[0] == _d.date(2026, 5, 7)
+        import sad_phenology_journal as PJ, sad_journal_trial as JT                       # журнал → фенологія й аналізи
+        pl_ = [{"row": 1, "position": i + 1, "role": "recorded", "replication": 1 + i // 4, "factors": {"Сорт": 1 + (i // 2) % 2}} for i in range(8)]
+        jj = {"factor_defs": [{"name": "Сорт", "levels": ["А", "Б"]}], "variant_names": [], "plants": pl_,
+              "records": {"Ф": {"kind": "date", "preset": "pome", "phase_key": "bloom0", "phase_name": "Початок цвітіння", "values": {f"1:{i + 1}": f"{10 + i}.05.2026" for i in range(8)}}}}
+        res = PJ.from_journal_years({"2026": jj}); assert res["preset"] == "pome" and len(res["years_data"][2026]) == 4, res
+        _, rows_ = JT.aggregate_journal_data(JT._plants_from_saved(pl_), jj["factor_defs"], [], jj["records"], ["Ф"]); assert rows_[0]["Ф"] > 120, rows_
     def t_report():
         import tempfile, shutil, os
         import sad_report as RP
@@ -177,7 +183,7 @@ def run(main_module, out_path=None):
                  ("розрахунок: генетичні параметри", t_breeding), ("розрахунок: кореляції (Кендалл, частинна)", t_corr),
                  ("розрахунок: генотипні кореляції", t_gencorr), ("розрахунок: η, бісеріальні, спряженість", t_assoc), ("scipy: stats/special/sparse/spatial/optimize", t_scipy_misc),
                  ("міжнародні показники: ET₀ FAO-56, SPI (scipy gamma.fit), Вінклер, Югліна, індекс сухості", t_indices),
-                 ("фенологія: розбір дат, зведення, ANOVA з НІР і літерами, візити", t_phenology),
+                 ("фенологія: розбір дат, зведення, ANOVA з НІР і літерами, візити, дані з польового журналу", t_phenology),
                  ("експорт звіту: Word (таблиці з сіткою, графіки) і Excel", t_report),
                  ("QR-таблички: ділянки, QR (segno), PDF із кирилицею, PNG, Excel, маніфест", t_qrlabels),
                  ("карта світу: дані, країна, найближче місто, пошук, відсікання", t_worldmap), ("копіювання таблиці: HTML-формат буфера", t_clip),
@@ -247,7 +253,7 @@ def run(main_module, out_path=None):
                 out = []
                 def walk(x):
                     for c in x.winfo_children():
-                        if c.winfo_class() == "Button": out.append(str(c.cget("state")))
+                        if c.winfo_class() == "Button" and "Сформувати план" in str(c.cget("text")): out.append(str(c.cget("state")))
                         walk(c)
                 walk(fr); return out
             assert _btns(sc._step3_area_content) == ["normal"], _btns(sc._step3_area_content)          # Крок 3 відкрито після введення розмірів

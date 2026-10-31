@@ -195,7 +195,20 @@ class SADTk:
   При незначущих вищих взаємодіях — спростіть до трифакторного.
 """
         }
-        text = help_texts.get(fc, "Довідка недоступна.")
+        text = help_texts.get(fc, "Довідка недоступна.") + """
+
+ПОРІВНЯННЯ З КОНТРОЛЕМ – ТЕСТ ДАННЕТТА
+  Коли питання досліду – «які варіанти відрізняються від контролю» (необроблений варіант,
+  стандартний сорт, норма добрива), оберіть у вікні методу «Тест Даннетта» і вкажіть
+  контроль для кожного фактора (контроль серед варіантів – комбінація контрольних рівнів).
+  Тест порівнює кожен рівень лише з контролем (k − 1 порівнянь), тому потужніший за Тьюкі
+  для цього питання і не потребує попереднього значущого F-тесту. Можна обрати двобічну
+  або однобічну перевірку («більше» чи «менше» контролю).
+  У звіті: різниця з контролем, % до контролю, одночасний 95 % довірчий інтервал, p.
+  Замість літер – позначки: К – контроль; ↑ / ↓ – істотно більше / менше (* p < 0,05,
+  ** p < 0,01); «–» – різниці немає. У графіках – Forest plot: інтервал, що не перетинає
+  нуль, означає істотну різницю.
+  Літер Даннетт не дає: він не групує варіанти між собою (для цього – НІР, Тьюкі, Дункан)."""
 
         win = tk.Toplevel(parent)
         win.title(f"Довідка — {['','Одно','Дво','Три','Чотири'][fc]}факторний ANOVA")
@@ -935,7 +948,8 @@ class SADTk:
             options = [("НІР₀₅ (LSD)", "lsd"),
                        ("Тест Тьюкі", "tukey"),
                        ("Тест Дункана", "duncan"),
-                       ("Бонферроні", "bonferroni")]
+                       ("Бонферроні", "bonferroni"),
+                       ("Тест Даннетта (порівняння з контролем)", "dunnett")]
         else:
             if design == "split":
                 tk.Label(frm,
@@ -1023,9 +1037,32 @@ class SADTk:
                      anchor="w", justify="left", wraplength=380
                      ).pack(fill=tk.X, pady=(6, 0))
 
+        # ── Даннетт: що є контролем ─────────────────────────────
+        ctl_vars = {}; alt_var = tk.StringVar(value="двобічний (відрізняється від контролю)"); bf_ref = []
+        if any(v == "dunnett" for _, v in options):
+            ctl_frm = tk.LabelFrame(frm, text=" Контроль для тесту Даннетта ", font=("Times New Roman", 11, "bold"), padx=10, pady=6)
+            for f, (title, levels) in (getattr(self, "_dlg_levels", {}) or {}).items():
+                r_ = tk.Frame(ctl_frm); r_.pack(fill=tk.X, pady=1)
+                tk.Label(r_, text=f"{title}:", font=("Times New Roman", 11), width=18, anchor="w").pack(side=tk.LEFT)
+                cv_ = tk.StringVar(value=str(levels[0]) if levels else "")
+                ttk.Combobox(r_, textvariable=cv_, values=[str(x) for x in levels], state="readonly", width=26).pack(side=tk.LEFT); ctl_vars[f] = cv_
+            r_ = tk.Frame(ctl_frm); r_.pack(fill=tk.X, pady=(4, 1)); tk.Label(r_, text="Перевірка:", font=("Times New Roman", 11), width=18, anchor="w").pack(side=tk.LEFT)
+            ttk.Combobox(r_, textvariable=alt_var, state="readonly", width=34, values=["двобічний (відрізняється від контролю)", "більше контролю (однобічний)", "менше контролю (однобічний)"]).pack(side=tk.LEFT)
+            tk.Label(ctl_frm, text="Кожен рівень (варіант) порівнюється лише з контролем; спільна помилка першого роду – для всіх порівнянь.\n"
+                     "Даннетт не потребує попереднього значущого F-тесту.", font=("Times New Roman", 9), fg="#555", justify="left").pack(anchor="w", pady=(4, 0))
+            def _toggle(*_):
+                if var.get() == "dunnett":
+                    ctl_frm.pack(fill=tk.X, pady=(8, 0), **({"before": bf_ref[0]} if bf_ref else {}))      # над кнопками, а не під ними
+                else: ctl_frm.pack_forget()
+                dlg.geometry(""); dlg.update_idletasks()                                                  # вікно перераховує розмір (інакше блок обрізається)
+            var.trace_add("write", _toggle); _toggle()
         def ok():
-            out.update({"ok": True, "method": var.get()}); dlg.destroy()
-        bf = tk.Frame(frm); bf.pack(pady=(12, 0))
+            out.update({"ok": True, "method": var.get()})
+            if var.get() == "dunnett":
+                out["control"] = {f: v.get() for f, v in ctl_vars.items()}
+                out["alternative"] = {"д": "two-sided", "б": "greater", "м": "less"}[alt_var.get()[0]]
+            dlg.destroy()
+        bf = tk.Frame(frm); bf.pack(pady=(12, 0)); bf_ref.append(bf)
         tk.Button(bf, text="▶ Виконати", width=14, bg="#c62828", fg="white",
                   font=("Times New Roman",12), command=ok).pack(side=tk.LEFT, padx=4)
         tk.Button(bf, text="Скасувати", width=12,
@@ -1271,9 +1308,10 @@ class SADTk:
                 "• або оберіть CRD/RCBD для непараметричного аналізу."
                 + sw_warning); return
 
+        self._dlg_levels = {f: (self.ftitle(f), list(lbf[f])) for f in self.factor_keys}   # для вибору контролю (Даннетт)
         choice = self.choose_method(p_norm, design, n_var)
         if not choice or not choice.get("ok"): return
-        method = choice["method"]
+        method = choice["method"]; self._dunnett_choice = choice if method == "dunnett" else None
 
         log_applied = False
         transform_label = ""
@@ -1312,7 +1350,7 @@ class SADTk:
                 "Оберіть метод пост-хок порівнянь:")
             choice2 = self.choose_method(p_norm, design, n_var)
             if not choice2["ok"]: return
-            method = choice2["method"]
+            method = choice2["method"]; self._dunnett_choice = choice2 if method == "dunnett" else None
             if method == "arcsin_param": method = "lsd"
 
         elif method in ("log_param", "sqrt_param", "log10_param"):
@@ -1368,7 +1406,7 @@ class SADTk:
                 "Оберіть метод парних порівнянь:")
             choice2 = self.choose_method(p_norm, design, n_var)
             if not choice2["ok"]: return
-            method = choice2["method"]
+            method = choice2["method"]; self._dunnett_choice = choice2 if method == "dunnett" else None
             if method in ("log_param", "sqrt_param", "log10_param"): method = "lsd"
 
         MS_err = res.get("MS_error", np.nan); df_err = res.get("df_error", np.nan)
@@ -1396,7 +1434,7 @@ class SADTk:
         rkf  = {f: mean_ranks(long, lambda r, ff=f: r.get(ff)) for f in self.factor_keys}
 
         lev_F, lev_p = (np.nan, np.nan)
-        if method in ("lsd", "tukey", "duncan", "bonferroni"):
+        if method in ("lsd", "tukey", "duncan", "bonferroni", "dunnett"):
             lev_F, lev_p = levene_test(groups1)
             # ── Блокування при неоднорідних дисперсіях ─────────
             if not math.isnan(lev_p) and lev_p < ALPHA:
@@ -1480,6 +1518,46 @@ class SADTk:
                         r_, s_ = pairwise_param(lbf[f], fm[f], fn[f], MS_, df_, method)
                         fpt[f] = r_; lf[f] = cld(lbf[f], fm[f], s_)
 
+        elif method == "dunnett":
+            # ── Даннетт: кожен рівень фактора (і кожен варіант) – проти контролю; похибка з ANOVA (split-plot: головний фактор – WP-похибка)
+            import sad_control_core as _CC
+            ch = getattr(self, "_dunnett_choice", None) or {}; ctl = ch.get("control") or {f: str(lbf[f][0]) for f in self.factor_keys}
+            alt = ch.get("alternative", "two-sided"); dn = {"factors": {}, "variants": None, "control": ctl, "alternative": alt, "notes": []}
+            def _dun(levels, means_d, ns_d, ctl_name, MS_, df_):
+                lv_ = [str(x) for x in levels if ns_d.get(x, 0) and not math.isnan(means_d.get(x, np.nan))]
+                key = {str(x): x for x in levels}
+                if ctl_name not in lv_ or len(lv_) < 2: return None
+                r = _CC.compare_estimates_to_control(lv_, np.array([means_d[key[x]] for x in lv_]), np.diag([MS_ / ns_d[key[x]] for x in lv_]), [ctl_name], int(df_), ALPHA, alt)
+                r["ctl_mean"] = float(means_d[key[ctl_name]]); return r
+            def _marks(r, levels):
+                out_ = {lv: "" for lv in levels}
+                if not r: return out_
+                for x in levels:
+                    if str(x) in r["control"]: out_[x] = "К"
+                for row in r["rows"]:
+                    lvl = next((x for x in levels if str(x) == row["entry"]), None)
+                    if lvl is None: continue
+                    st = "**" if row["p_dunnett"] < 0.01 else ("*" if row["p_dunnett"] < ALPHA else "")
+                    out_[lvl] = (("↑" if row["diff"] > 0 else "↓") + st) if st else "–"
+                return out_
+            for f in self.factor_keys:
+                MS_ = MS_wp if (design == "split" and f == split_mf) else MS_err; df_ = df_wp if (design == "split" and f == split_mf) else df_err
+                try: r = _dun(lbf[f], fm[f], fn[f], str(ctl.get(f, lbf[f][0])), MS_, df_)
+                except Exception as ex: r = None; dn["notes"].append(f"{self.ftitle(f)}: {ex}")
+                dn["factors"][f] = r; lf[f] = _marks(r, lbf[f])
+            if design != "split" and len(self.factor_keys) > 1:
+                ctl_var = next((nm for nm in v_names if [s_.strip() for s_ in str(nm).split("|")] == [str(ctl.get(f, "")) for f in self.factor_keys]), None)
+                if ctl_var is None:                                       # назва варіанта – комбінація рівнів у тому самому порядку
+                    want = [str(ctl.get(f, "")) for f in self.factor_keys]
+                    ctl_var = next((nm for nm in v_names if all(w_ in str(nm) for w_ in want)), None)
+                if ctl_var is not None:
+                    try: rv = _dun(v_names, means1, ns1, str(ctl_var), MS_err, df_err)
+                    except Exception as ex: rv = None; dn["notes"].append(f"Варіанти: {ex}")
+                    dn["variants"] = rv; dn["ctl_variant"] = ctl_var; lnamed = _marks(rv, v_names)
+            elif len(self.factor_keys) == 1:
+                lnamed = {nm: lf[self.factor_keys[0]].get(nm, "") for nm in v_names}
+            self._dunnett_res = dn
+
         elif method == "kw":
             try:
                 smp = [groups1[n] for n in v_names if groups1[n]]
@@ -1562,6 +1640,7 @@ class SADTk:
         # cache for graph redraw
         self._lbf_cache = lbf
 
+        self._dunnett_for_graph = getattr(self, "_dunnett_res", None) if method == "dunnett" else None
         self.show_report(
             created=created, indicator=indicator, units=units, design=design,
             arcsin_applied=arcsin_applied,
@@ -1583,6 +1662,7 @@ class SADTk:
             vmed=vmed, vq=vq, rkv=rkv, rkf=rkf,
             groups1=groups1, ph_rows=ph_rows, fpt=fpt,
             rcbd_ph=rcbd_ph, nonparam=nonparam, res=res,
+            dunnett=(getattr(self, "_dunnett_res", None) if method == "dunnett" else None),
         )
         self.show_graphs(long, lf, indicator, units, eff_rows, pe2_rows,
                          parent_win=self.report_win if (
@@ -1707,7 +1787,7 @@ class SADTk:
         elif d['log_applied']:
             tl = d.get('transform_label', 'ln(x)')
             _txt(f"⚠ Застосовано трансформацію {tl}. Середні у звіті — у трансформованій шкалі.")
-        method_lbl = {"lsd": "НІР₀₅ (LSD)", "tukey": "Тест Тьюкі", "duncan": "Тест Дункана",
+        method_lbl = {"lsd": "НІР₀₅ (LSD)", "tukey": "Тест Тьюкі", "duncan": "Тест Дункана", "dunnett": "Тест Даннетта (порівняння з контролем)",
                       "bonferroni": "Бонферроні", "kw": "Kruskal–Wallis", "mw": "Mann–Whitney",
                       "friedman": "Friedman", "wilcoxon": "Wilcoxon"}.get(d['method'], "")
         _txt(f"Метод: {method_lbl}")
@@ -1751,14 +1831,14 @@ class SADTk:
                            fmt(d['fsd'][f].get(lv, np.nan), 3),
                            d['lf'][f].get(lv, "") or "–"]
                           for lv in d['lbf'][f]]
-                _table([self.ftitle(f), "Середнє", "± SD", "Літери CLD"], rows_f); tno += 1
+                _table([self.ftitle(f), "Середнє", "± SD", "Порівняння з контролем" if d['method'] == "dunnett" else "Літери CLD"], rows_f); tno += 1
 
             _head(f"ТАБЛИЦЯ {tno}. Середні по варіантах")
             rows_v = [[nm, fmt(d['v_means'].get(d['var_order'][i], np.nan), 3),
                        fmt(d['v_sds'].get(d['var_order'][i], np.nan), 3),
                        d['lv_var'].get(d['var_order'][i], "") or "–"]
                       for i, nm in enumerate(d['v_names'])]
-            _table(["Варіант", "Середнє", "± SD", "Літери CLD"], rows_v); tno += 1
+            _table(["Варіант", "Середнє", "± SD", "Порівняння з контролем" if d['method'] == "dunnett" else "Літери CLD"], rows_v); tno += 1
 
             if d['design'] != "split":
                 if d['method'] in ("tukey", "duncan", "bonferroni") and d['ph_rows']:
@@ -1770,6 +1850,31 @@ class SADTk:
                     if rr:
                         _head(f"ТАБЛИЦЯ {tno}. Парні порівняння: {self.ftitle(f)}")
                         _table(["Пара", "p", "Висновок"], rr); tno += 1
+            if d['method'] == "dunnett" and d.get('dunnett'):
+                dn = d['dunnett']; alt_txt = {"two-sided": "двобічний", "greater": "однобічний: більше контролю", "less": "однобічний: менше контролю"}[dn['alternative']]
+                _txt(f"Порівняння з контролем – тест Даннетта ({alt_txt}, α = {ALPHA}). Позначки: К – контроль; ↑ / ↓ – істотно більше / менше "
+                     f"контролю (* p < 0,05; ** p < 0,01); «–» – істотної різниці немає. Довірчі інтервали – одночасні (Даннетта) для всіх порівнянь.")
+                def _dun_rows(r):
+                    out_ = []
+                    for row in r["rows"]:
+                        st = "**" if row["p_dunnett"] < 0.01 else ("*" if row["p_dunnett"] < ALPHA else "")
+                        concl = (("істотно більше " if row["diff"] > 0 else "істотно менше ") + st) if st else "неістотно"
+                        lo = "−∞" if math.isinf(row["ci_lo"]) else fmt(row["ci_lo"], 3); hi = "+∞" if math.isinf(row["ci_hi"]) else fmt(row["ci_hi"], 3)
+                        out_.append([row["entry"], fmt(row["mean"], 3), ("+" if row["diff"] > 0 else "") + fmt(row["diff"], 3), fmt(row["pct"], 1),
+                                     f"{lo} … {hi}", fmt(row["p_dunnett"], 4), concl])
+                    return out_
+                hdr = ["Рівень", "Середнє", "Різниця з контролем", "% до контролю", "95 % ДІ різниці (одночасний)", "p (Даннетт)", "Висновок"]
+                for f in self.factor_keys:
+                    r = dn['factors'].get(f)
+                    if not r: continue
+                    _head(f"ТАБЛИЦЯ {tno}. Порівняння з контролем: {self.ftitle(f)} (контроль – {dn['control'].get(f)}, середнє {fmt(r['ctl_mean'], 3)})")
+                    _table([self.ftitle(f)] + hdr[1:], _dun_rows(r)); tno += 1
+                    _txt(f"Критичне значення Даннетта {fmt(r['crit'], 3)}; df похибки {r['df']}.")
+                if dn.get('variants'):
+                    r = dn['variants']
+                    _head(f"ТАБЛИЦЯ {tno}. Порівняння варіантів із контролем (контроль – {dn.get('ctl_variant')}, середнє {fmt(r['ctl_mean'], 3)})")
+                    _table(["Варіант"] + hdr[1:], _dun_rows(r)); tno += 1
+                for nt in dn.get('notes', []): _txt("⚠ " + nt)
         else:
             tno = 1
             for f in self.factor_keys:
@@ -1955,6 +2060,8 @@ class SADTk:
             ("vn",   "🎯 Сила впливу",        "% від SS"),
             ("pe",   "💡 Розмір ефекту",      "Partial η²"),
         ]
+        if getattr(self, "_dunnett_for_graph", None):
+            tab_defs.append(("forest", "🌲 Forest plot", "Різниця з контролем (Даннетт)"))
 
         frames = {}
         for key, lbl, tooltip in tab_defs:
@@ -1979,6 +2086,7 @@ class SADTk:
         self._build_hist_tab(frames["hist"], long, gs, indicator, units, gw)
         self._build_vn_tab(  frames["vn"],   eff_rows, gs, gw)
         self._build_pe_tab(  frames["pe"],   pe2_rows, gs, gw)
+        if "forest" in frames: self._build_forest_tab(frames["forest"], gs, gw)
         # НЕ показуємо жодну вкладку автоматично
 
 
@@ -2479,6 +2587,55 @@ class SADTk:
         ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
         fig.tight_layout()
         self._graph_figs["vn"]=fig
+        embed_figure(fig, plot_f)
+
+    # ── Forest plot: різниці з контролем і одночасні ДІ Даннетта ─
+    def forest_figure(self, dn, gs, title=None):
+        """Figure: для кожного фактора (і варіантів) – різниця середнього з контролем і одночасний 95 % ДІ Даннетта.
+        Інтервал, що не перетинає нуль, – істотна різниця."""
+        blocks = [(self.ftitle(f), dn["control"].get(f), r) for f, r in dn["factors"].items() if r]
+        if dn.get("variants"): blocks.append(("Варіанти", dn.get("ctl_variant"), dn["variants"]))
+        fp = {"fontsize": gs["font_size"], "fontfamily": gs["font_family"]}
+        n_rows = sum(len(b[2]["rows"]) for b in blocks) or 1
+        fig = Figure(figsize=(10, max(3.2, 0.42 * n_rows + 1.4 * len(blocks) + 0.8)), dpi=100)
+        if not blocks:
+            ax = fig.add_subplot(111); ax.axis("off"); ax.text(0.5, 0.5, "Немає порівнянь із контролем", ha="center", va="center", **fp); return fig
+        hr = [max(1, len(b[2]["rows"])) + 1.2 for b in blocks]; axes = fig.subplots(len(blocks), 1, gridspec_kw={"height_ratios": hr}, squeeze=False)[:, 0]
+        c_up = gs.get("forest_up_color", "#1a6b1a"); c_dn = gs.get("forest_down_color", "#c62828"); c_ns = gs.get("forest_ns_color", "#7f8c8d")
+        for ax, (name, ctl, r) in zip(axes, blocks):
+            rows = r["rows"]; ys = list(range(len(rows)))[::-1]
+            fin = [v for row in rows for v in (row["ci_lo"], row["ci_hi"], row["diff"]) if not math.isinf(v)]
+            span = (max(fin) - min(fin)) if fin else 1.0; pad = 0.08 * (span or 1.0)
+            lo_lim = min(fin + [0.0]) - pad; hi_lim = max(fin + [0.0]) + pad * 3.5
+            for y, row in zip(ys, rows):
+                sig = row["sig"]; col = (c_up if row["diff"] > 0 else c_dn) if sig else c_ns
+                lo = lo_lim if math.isinf(row["ci_lo"]) else row["ci_lo"]; hi = hi_lim if math.isinf(row["ci_hi"]) else row["ci_hi"]
+                ax.plot([lo, hi], [y, y], color=col, lw=2.2, solid_capstyle="butt")
+                if not math.isinf(row["ci_lo"]): ax.plot([lo, lo], [y - 0.18, y + 0.18], color=col, lw=1.6)
+                if not math.isinf(row["ci_hi"]): ax.plot([hi, hi], [y - 0.18, y + 0.18], color=col, lw=1.6)
+                ax.plot([row["diff"]], [y], marker="D", color=col, ms=7, zorder=3)
+                st = "**" if row["p_dunnett"] < 0.01 else ("*" if row["p_dunnett"] < ALPHA else "")
+                ax.text(hi_lim, y, f" {row['pct']:.1f} %{(' ' + st) if st else ''}", va="center", ha="right", color=col, **fp)
+            ax.axvline(0, color="#222222", lw=1.0)
+            ax.set_yticks(ys); ax.set_yticklabels([row["entry"] for row in rows], **fp); ax.set_xlim(lo_lim, hi_lim); ax.set_ylim(-0.7, len(rows) - 0.3)
+            ax.set_title(f"{name}: різниця з контролем «{ctl}»", loc="left", **fp)
+            ax.xaxis.grid(True, linestyle="--", alpha=0.35); ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+        axes[-1].set_xlabel(f"Різниця з контролем{(', ' + self._g_units) if getattr(self, '_g_units', '') else ''}\nромб – різниця; лінія – одночасний 95 % ДІ Даннетта; праворуч – % до контролю", **fp)
+        fig.suptitle(title or self._gs_titles.get("forest", "Порівняння з контролем (тест Даннетта)"), **fp)
+        fig.tight_layout(); return fig
+
+    def _build_forest_tab(self, frame, gs, gw=None):
+        for w in frame.winfo_children(): w.destroy()
+        def _rebuild(): self._build_forest_tab(frame, self.graph_settings, gw)
+        def _settings():
+            self._settings_dialog(gw, "forest", _rebuild, extra_params=[
+                ("Колір: істотно більше:", "forest_up_color", "#1a6b1a", "color", None),
+                ("Колір: істотно менше:", "forest_down_color", "#c62828", "color", None),
+                ("Колір: неістотно:", "forest_ns_color", "#7f8c8d", "color", None)])
+        self._tab_toolbar(frame, "forest", _rebuild, _settings)
+        plot_f = tk.Frame(frame); plot_f.pack(fill=tk.BOTH, expand=True)
+        fig = self.forest_figure(self._dunnett_for_graph, gs)
+        self._graph_figs["forest"] = fig
         embed_figure(fig, plot_f)
 
     # ── TAB 7: Розмір ефекту ───────────────────────────────────
