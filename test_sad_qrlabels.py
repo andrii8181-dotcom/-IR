@@ -259,8 +259,14 @@ check(all(os.path.exists(os.path.join(folder, "K7M2_png", n)) for n in names[4:]
 from PIL import Image as _I; im0 = _I.open(files[4]); check(abs(im0.info.get("dpi", (0, 0))[0] - 200) < 1, "у PNG записано роздільність 200 dpi (друкується в реальному розмірі)")
 calls = []
 import subprocess as sp, sad_qrlabels as QQ
-orig_popen = sp.Popen; sp.Popen = lambda *a, **k: calls.append(a[0]); QQ.open_for_print("/tmp/x.pdf"); sp.Popen = orig_popen
-check(calls and calls[0][-1] == "/tmp/x.pdf" and calls[0][0] in ("xdg-open", "open"), f"«відкрити для друку» викликає програму системи: {calls}")
+orig_popen = sp.Popen; sp.Popen = lambda *a, **k: calls.append(a[0])                 # Linux, macOS
+orig_sf = getattr(os, "startfile", None); os.startfile = lambda p_, *a, **k: calls.append(["startfile", p_])   # Windows (без справжнього відкриття)
+try: QQ.open_for_print("/tmp/x.pdf")
+finally:
+    sp.Popen = orig_popen
+    if orig_sf is None: del os.startfile
+    else: os.startfile = orig_sf
+check(calls and calls[0][-1] == "/tmp/x.pdf" and calls[0][0] in ("xdg-open", "open", "startfile"), f"«відкрити для друку» викликає програму системи: {calls}")
 
 print("\n== 9. Великий дослід і незалежність дослідів")
 t0 = time.time(); bg = Q.build_experiment(area_scheme([("Сорт", [f"С{i}" for i in range(1, 6)]), ("Добриво", [f"Д{i}" for i in range(1, 5)])], 10), "B7K2", "Великий"); Q.fill_payloads(bg, "descriptive", "m", "S")
