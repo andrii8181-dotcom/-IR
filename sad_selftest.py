@@ -11,7 +11,7 @@ MODULES = ['sad_app', 'sad_assoc_core', 'sad_assoc_sections', 'sad_breeding', 's
            'sad_control_core', 'sad_corr_core', 'sad_corr_sections', 'sad_correlation', 'sad_descriptive_ttest', 'sad_design_core',
            'sad_design_sections', 'sad_gencorr_core', 'sad_gencorr_sections', 'sad_gxe_core', 'sad_het_ord_sections',
            'sad_heterosis_core', 'sad_homogeneous', 'sad_journal_trial', 'sad_manova', 'sad_mixed_core', 'sad_mixed_sections',
-           'sad_ordinal_core', 'sad_phenology', 'sad_phenology_dialogs', 'sad_phenology_journal', 'sad_phenology_results', 'sad_phenology_win', 'sad_qr_dialog', 'sad_qrlabels', 'sad_regression', 'sad_report', 'sad_repeated', 'sad_scheme_constructor', 'sad_selection_core',
+           'sad_ordinal_core', 'sad_phenology', 'sad_phenology_dialogs', 'sad_phenology_journal', 'sad_journal_phen', 'sad_phenology_results', 'sad_phenology_win', 'sad_qr_dialog', 'sad_qrlabels', 'sad_regression', 'sad_report', 'sad_repeated', 'sad_scheme_constructor', 'sad_selection_core',
            'sad_selection_sections', 'sad_stability_ancova', 'sad_weather', 'sad_weather_charts', 'sad_weather_core', 'sad_weather_export', 'sad_weather_indices', 'sad_worldmap']
 WINDOWS = ["CorrelationWindow", "DescriptiveWindow", "TTestWindow", "RegressionWindow", "ClusterWindow", "PCAWindow",
            "RepeatedMeasuresWindow", "MixedRepeatedWindow", "StabilityWindow", "AncovaWindow", "ManovaWindow", "FieldJournalWindow",

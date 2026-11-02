@@ -14,7 +14,8 @@ MONTH_START = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]; MONTH_ABB
 PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf", "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5"]
 CLASS_BG = {"ранній": "#c8e6c9", "середній": "#ffffff", "пізній": "#ffe0b2"}
 CHARTS = ["Фенологічний спектр (середні дати й тривалість періодів)", "Дати за сортами (розподіл за роками й повторностями)", "Відхилення від стандарту (діб)", "Динаміка за роками",
-          "Розподіл середніх дат сортів (гістограма)", "Ранжований профіль середніх дат"]
+          "Розподіл середніх дат сортів (гістограма)", "Ранжований профіль середніх дат",
+          "Фази на тлі температури (погода)", "Суми температур до фази за сортами (погода)"]
 MAX_SHOWN = 30                    # більше сортів на графіках не показуємо: стандарт + найранішi й найпізніші за вибраною фазою
 
 
@@ -40,9 +41,62 @@ def _dow_axis(ax, lo, hi, axis="x"):
     (ax.set_xticks if axis == "x" else ax.set_yticks)(ticks); (ax.set_xticklabels if axis == "x" else ax.set_yticklabels)(labs, fontfamily=FONT, fontsize=9)
 
 
+def _names(lst, n=6):
+    return ", ".join(lst[:n]) + (f" і ще {len(lst) - n}" if len(lst) > n else "")
+
+
+def build_conclusions(c, crop=""):
+    """Висновки звичайними реченнями. → [(тип, текст)], тип: 'h' – заголовок, 't' – текст."""
+    out = [("h", "Загалом"), ("t", f"{crop + ': ' if crop else ''}років – {len(c['years'])} ({', '.join(map(str, c['years']))}), сортів – {len(c['cultivars'])}, спостережень – {c['n_obs']}.")]
+    if c["standard"] or c.get("ref_of"):
+        st = sorted(set(v for v in (c.get("ref_of") or {}).values() if v)) or [c["standard"]]
+        out.append(("t", "Порівняння – зі стандартом " + (", ".join(f"«{x}»" for x in st)) + (" (кожна група стиглості – зі своїм)." if len(st) > 1 else ".")))
+    else:
+        out.append(("t", "Стандарт не обрано – сорти порівнюються із середнім за всіма сортами."))
+    thr = c.get("thr", 3.0)
+    for ph in c["phases"]:
+        k = ph["key"]; have = [cv for cv in c["cultivars"] if c["summ"][(cv, k)]["n"] > 0]
+        if not have: continue
+        srt = sorted(have, key=lambda cv: c["summ"][(cv, k)]["mean"]); a, b = srt[0], srt[-1]
+        ma, mb = c["summ"][(a, k)]["mean"], c["summ"][(b, k)]["mean"]
+        out.append(("h", ph["name"]))
+        out.append(("t", f"Найраніше – {a} ({P.md_from_doy(ma)}), найпізніше – {b} ({P.md_from_doy(mb)}); різниця між ними {_f(mb - ma, 0)} діб." if len(have) > 1 else f"{a}: {P.md_from_doy(ma)}."))
+        an = c["anova"].get(k) or {}
+        if "error" not in an and an:
+            pv = an["p"]; out.append(("t", ("Сорти істотно різняться за датою настання цієї фази" if pv < 0.05 else "Різниця між сортами за датою статистично неістотна") +
+                                     (f" (p {'< 0,001' if pv < 0.001 else '= ' + _f(pv, 3)})." if pv == pv else ".")))
+            yr = next((r for r in an.get("table", []) if r["name"] == "Фактор Y"), None)
+            if yr and yr["p"] == yr["p"] and yr["p"] < 0.05: out.append(("t", "Рік істотно впливає на строк настання (погода різних років зсуває фазу)."))
+        cm = (c.get("compare") or {}).get(k) or {}
+        vs = cm.get("vs") if isinstance(cm, dict) else None
+        if vs and cm.get("method") in ("dunnett", "control"):
+            early = [cv for cv, v in vs.items() if v.get("sig") and v.get("diff", 0) < 0]; late = [cv for cv, v in vs.items() if v.get("sig") and v.get("diff", 0) > 0]
+            meth = "тест Даннетта" if cm["method"] == "dunnett" else "t із поправкою Холма"
+            out.append(("t", f"Істотно раніше стандарту ({meth}): {_names(early) or 'немає'}; істотно пізніше: {_names(late) or 'немає'}."))
+        elif c["standard"] or c.get("ref_of"):
+            early = [cv for cv in have if c["vs"][(cv, k)][1] == "ранній"]; late = [cv for cv in have if c["vs"][(cv, k)][1] == "пізній"]
+            out.append(("t", f"Раніше стандарту щонайменше на {thr:g} доби: {_names(early) or 'немає'}; пізніше: {_names(late) or 'немає'}."))
+        if c.get("sums") is not None:
+            sv = [(cv, c["sums"][(cv, k)]["mean"]) for cv in have if c["sums"][(cv, k)]["n"] > 0]
+            if sv:
+                lo = min(sv, key=lambda x: x[1]); hi = max(sv, key=lambda x: x[1]); kind = "активних" if c["sum_cfg"]["kind"] == "sat" else "ефективних"
+                if hi[1] < 0.5: out.append(("t", f"Сума {kind} температур до фази – 0: до її настання середня добова температура ще не перевищувала {c['sum_cfg']['base']:g} °C."))
+                elif hi[1] - lo[1] < 0.5: out.append(("t", f"Сума {kind} температур до фази – близько {hi[1]:.0f} °C·діб, однакова для сортів."))
+                else: out.append(("t", f"Сума {kind} температур до фази: від {lo[1]:.0f} ({lo[0]}) до {hi[1]:.0f} °C·діб ({hi[0]})."))
+    if c["pairs"]:
+        a, b = c["pairs"][-1]; nm = {p["key"]: p["name"] for p in c["phases"]}
+        dv = [(cv, c["dur"][(cv, (a, b))]["mean"]) for cv in c["cultivars"] if c["dur"][(cv, (a, b))]["n"] > 0]
+        if len(dv) > 1:
+            lo = min(dv, key=lambda x: x[1]); hi = max(dv, key=lambda x: x[1]); out.append(("h", f"Період «{nm[a]}» → «{nm[b]}»"))
+            out.append(("t", f"Найкоротший – у сорту {lo[0]} ({_f(lo[1], 0)} діб), найдовший – у {hi[0]} ({_f(hi[1], 0)} діб)."))
+    if c.get("warnings"): out += [("h", "Зверніть увагу"), ("t", f"Підозрілих дат: {len(c['warnings'])} (порушено порядок фаз або дата з іншого року) – перевірте їх у таблиці.")]
+    if c.get("series") is None: out += [("h", "Погода"), ("t", "Погоду не підключено. Щоб побачити суми температур до фаз і графік фаз на тлі температури, оберіть у головному вікні «Налаштування → Погода для сум температур…».")]
+    return out
+
+
 class PhenologyResults:
-    def __init__(self, parent, ctx, crop_name=""):
-        self.ctx = ctx; self.crop = crop_name
+    def __init__(self, parent, ctx, crop_name="", on_thr=None):
+        self.ctx = ctx; self.crop = crop_name; self.on_thr = on_thr
         self._stds = set(ctx.get("standards") or ([ctx["standard"]] if ctx["standard"] else [])); self._grp = ctx.get("groups") or {}; self._gstd = ctx.get("group_std") or {}
         self._multi = bool(ctx.get("ref_of")) and len(set(v for v in ctx["ref_of"].values() if v)) > 1; self.fig = None; self.method = ctx.get("method", "auto"); self.comp = ctx["compare"]
         self.win = tk.Toplevel(parent); self.win.title("Фенологічні спостереження — Результати"); self.win.geometry("1240x800"); set_icon(self.win)
@@ -55,7 +109,7 @@ class PhenologyResults:
         if c["warnings"]: notes.append(f"Попередження: {len(c['warnings'])} (порушено порядок фаз або дата з іншого року): " + "; ".join(f"{w['name']} {w['year']} – {w['msg']}" for w in c["warnings"][:3]) + (" …" if len(c["warnings"]) > 3 else ""))
         if notes: tk.Label(self.win, text=" ".join(notes), font=SM, fg="#8c5a1a", wraplength=1180, justify="left", anchor="w").pack(fill=tk.X, padx=10)
         self.nb = ttk.Notebook(self.win); self.nb.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
-        self._tab_means(); self._tab_standard(); self._tab_durations(); self._tab_anova()
+        self._tab_conclusions(); self._tab_means(); self._tab_standard(); self._tab_durations(); self._tab_anova()
         if c["sums"] is not None: self._tab_sums()
         self._tab_charts()
 
@@ -86,8 +140,38 @@ class PhenologyResults:
         self._table(f, ["Сорт", "n"] + self._phase_heads(), rows, tags)
         tk.Label(f, text="n – найбільша кількість спостережень (роки × повторності) по фазах. Дати – за нормованим номером дня року (високосні роки узгоджено).", font=SM, fg="#777", wraplength=1150, justify="left").pack(anchor="w")
 
+    def _tab_conclusions(self):
+        """Перша вкладка – висновки звичайними реченнями (для швидкого погляду; деталі – в інших вкладках)."""
+        f = self._tab("Висновки"); self.concl_frame = f; self._fill_conclusions()
+
+    def _fill_conclusions(self):
+        for w in self.concl_frame.winfo_children(): w.destroy()
+        txt = tk.Text(self.concl_frame, wrap="word", font=("Times New Roman", 12), relief=tk.FLAT, bg="#fafafa", padx=14, pady=10, height=24)
+        sb = ttk.Scrollbar(self.concl_frame, command=txt.yview); txt.configure(yscrollcommand=sb.set); sb.pack(side=tk.RIGHT, fill=tk.Y); txt.pack(fill=tk.BOTH, expand=True)
+        txt.tag_configure("h", font=("Times New Roman", 12, "bold"), foreground="#1a4b8c", spacing1=8)
+        for kind, line in build_conclusions(self.ctx, self.crop):
+            txt.insert(tk.END, line + "\n", ("h",) if kind == "h" else ())
+        txt.configure(state="disabled")
+
     def _tab_standard(self):
-        c = self.ctx; f = self._tab("Стандарт і групи"); keys = [p["key"] for p in c["phases"]]
+        f = self._tab("Стандарт і групи"); self.std_frame = f; self._build_standard()
+
+    def _set_thr(self, *_):
+        """Поріг «ранній / пізній» змінено – перерахунок класів і перебудова вкладок стандарту й висновків."""
+        try: thr = max(0.0, float(str(self.thr_var.get()).replace(",", ".")))
+        except ValueError: return
+        c = self.ctx; keys = [p["key"] for p in c["phases"]]
+        c["vs"], c["ref"] = P.vs_standard(c["summ"], c["cultivars"], keys, c["standard"] or None, thr, c.get("ref_of")); c["thr"] = thr
+        if self.on_thr: self.on_thr(thr)
+        self._build_standard(); self._fill_conclusions()
+
+    def _build_standard(self):
+        f = self.std_frame
+        for w in f.winfo_children(): w.destroy()
+        c = self.ctx; keys = [p["key"] for p in c["phases"]]
+        tb = tk.Frame(f); tb.pack(fill=tk.X, pady=(0, 4)); tk.Label(tb, text="Вважати сорт раннім / пізнім, якщо різниця ≥", font=RF).pack(side=tk.LEFT)
+        self.thr_var = tk.StringVar(value=f"{c['thr']:g}"); sp = tk.Spinbox(tb, from_=0, to=30, increment=1, textvariable=self.thr_var, width=4, font=RF, command=self._set_thr)
+        sp.pack(side=tk.LEFT, padx=4); sp.bind("<Return>", self._set_thr); sp.bind("<FocusOut>", self._set_thr); tk.Label(tb, text="діб (зміна одразу перераховує класи)", font=RF).pack(side=tk.LEFT)
         ref = ("стандарту своєї групи стиглості" if self._gstd else ("стандарту «" + c["standard"] + "»" if c["standard"] else "середнього за сортами"))
         tk.Label(f, text=f"Різниця середніх дат відносно {ref}, діб: «−» раніше, «+» пізніше. Ранній ≤ −{_f(c['thr'], 1).replace('−', '')} діб, пізній ≥ +{_f(c['thr'], 1).replace('−', '')} діб.", font=SM, fg="#555").pack(anchor="w")
         gcols = (lambda cv: [self._grp.get(cv, "–"), (c["ref_of"] or {}).get(cv) or "–"]) if self._gstd else (lambda cv: [])
@@ -207,7 +291,7 @@ class PhenologyResults:
     def _draw(self):
         for w in self.chart_holder.winfo_children(): w.destroy()
         kind = CHARTS.index(self.chart_var.get()); k = self._cp_labels[self.cphase_var.get()]
-        fig = [self.fig_spectrum, self.fig_box, self.fig_dev, self.fig_dyn, self.fig_hist, self.fig_rank][kind](k)
+        fig = [self.fig_spectrum, self.fig_box, self.fig_dev, self.fig_dyn, self.fig_hist, self.fig_rank, self.fig_temp, self.fig_sums][kind](k)
         self.fig = fig; embed_figure(fig, self.chart_holder)
 
     def _save_png(self):
@@ -217,6 +301,53 @@ class PhenologyResults:
 
     def _empty(self, text):
         fig = Figure(figsize=(8, 3), dpi=100); ax = fig.add_subplot(111); ax.axis("off"); ax.text(0.5, 0.5, text, ha="center", va="center", fontfamily=FONT, fontsize=12, color="#8c5a1a", wrap=True); return fig
+
+    def fig_temp(self, k):
+        """Середня добова температура за сезон (згладжена, кожен рік – окрема лінія) і смуги фаз: від найранішого до найпізнішого сорту."""
+        c = self.ctx; ser = c.get("series")
+        if ser is None: return self._empty("Погоду не підключено. У головному вікні: «Налаштування → Погода для сум температур…».")
+        phs = [p for p in c["phases"] if any(c["summ"][(cv, p["key"])]["n"] > 0 for cv in c["cultivars"])]
+        if not phs: return self._empty("Немає дат фаз.")
+        spans = {p["key"]: [c["summ"][(cv, p["key"])]["mean"] for cv in c["cultivars"] if c["summ"][(cv, p["key"])]["n"] > 0] for p in phs}
+        lo = min(min(v) for v in spans.values()) - 20; hi = max(max(v) for v in spans.values()) + 20
+        fig = Figure(figsize=(11, 5.6), dpi=100); ax = fig.add_subplot(111); drawn = 0
+        for i, y in enumerate(c["years"]):
+            import datetime as _d
+            d0 = _d.date(y, 1, 1) + _d.timedelta(days=max(0, int(lo) - 1)); d1 = _d.date(y, 1, 1) + _d.timedelta(days=min(364, int(hi)))
+            sl = ser.slice(d0, d1)
+            if not len(sl.dates) or not sl.has("tmean"): continue
+            t = np.nan_to_num(np.asarray(sl.get("tmean"), float), nan=float(np.nanmean(sl.get("tmean"))))
+            sm = np.convolve(np.pad(t, 2, mode="edge"), np.ones(5) / 5, mode="valid")      # краї – без провалу (повторення крайніх значень)
+            xs = [P.doy_norm(d) for d in sl.dates]
+            ax.plot(xs, sm, lw=1.7, color=("#111111", "#666666", "#999999", "#2c3e50")[i % 4], ls=("-", "--", "-.", ":")[(i // 4) % 4] if i >= 4 else ("-", "--", "-.", ":")[i % 4],
+                    label=f"{y}: t сер. (5-денна)"); drawn += 1
+        if not drawn: return self._empty("Погода не покриває роки досліду.")
+        ylo, yhi = ax.get_ylim()
+        for i, p in enumerate(phs):
+            v = spans[p["key"]]; col = PALETTE[i % len(PALETTE)]; sel = p["key"] == k
+            ax.axvspan(min(v) - 0.5, max(v) + 0.5, color=col, alpha=0.32 if sel else 0.13, lw=0)
+            ax.axvline(float(np.mean(v)), color=col, lw=2.2 if sel else 1.0, ls="-" if sel else "--")
+            ax.text(float(np.mean(v)), yhi, " " + p["name"], rotation=90, va="top", ha="right", fontsize=8.5 if not sel else 9.5, fontfamily=FONT, color="#222222", fontweight="bold" if sel else "normal")
+        cfg = c.get("sum_cfg")
+        if cfg: ax.axhline(float(cfg["base"]), color="#666666", lw=1, ls=":", label=f"поріг {cfg['base']:g} °C (суми температур)")
+        _dow_axis(ax, lo, hi); ax.set_xlim(lo, hi); ax.set_ylabel("Середня добова температура, °C", fontfamily=FONT, fontsize=11); ax.grid(alpha=0.3)
+        ax.set_title("Фази на тлі температури: смуга – від найранішого до найпізнішого сорту, лінія – середня дата", fontfamily=FONT, fontsize=12)
+        ax.legend(loc="lower center", prop={"family": FONT, "size": 9}, frameon=False, ncol=4); fig.tight_layout(); return fig
+
+    def fig_sums(self, k):
+        """Сума температур до фази (середнє ± SD за роки й повторності) за сортами."""
+        c = self.ctx
+        if c.get("sums") is None: return self._empty("Погоду не підключено. У головному вікні: «Налаштування → Погода для сум температур…».")
+        cvs, note = self._subset(k); vals = [(cv, c["sums"][(cv, k)]) for cv in cvs if c["sums"][(cv, k)]["n"] > 0]
+        if not vals: return self._empty("Для цієї фази немає сум температур (погода не покриває періоди).")
+        vals.sort(key=lambda x: x[1]["mean"]); fig = Figure(figsize=(9.5, max(3.2, 0.36 * len(vals) + 1.8)), dpi=100); ax = fig.add_subplot(111)
+        ys = range(len(vals)); m = [v["mean"] for _, v in vals]; sd = [0 if (v["n"] < 2 or v["sd"] != v["sd"]) else v["sd"] for _, v in vals]
+        ax.barh(list(ys), m, xerr=sd, color=["#e65100" if cv in self._stds else "#4c72b0" for cv, _ in vals], height=0.62, capsize=2, error_kw={"elinewidth": 0.9})
+        ax.set_yticks(list(ys)); ax.set_yticklabels([cv for cv, _ in vals], fontfamily=FONT, fontsize=9.5); ax.grid(axis="x", alpha=0.3); ax.set_axisbelow(True)
+        cfg = c["sum_cfg"]; kind = "активних (САТ)" if cfg["kind"] == "sat" else "ефективних (СЕТ)"
+        start = f"з {int(cfg['start'][2]):02d}.{int(cfg['start'][1]):02d}" if cfg["start"][0] == "md" else "від дати фази «" + next((p["name"] for p in c["all_phases"] if p["key"] == cfg["start"][1]), cfg["start"][1]) + "»"
+        ax.set_xlabel(f"Сума {kind} температур > {cfg['base']:g} °C, °C·діб ({start}); помаранчевим – стандарт" + (f"; {note}" if note else ""), fontfamily=FONT, fontsize=10)
+        ax.set_title(next(p["name"] for p in c["phases"] if p["key"] == k) + ": сума температур до настання", fontfamily=FONT, fontsize=12); fig.tight_layout(); return fig
 
     def fig_spectrum(self, _k=None):
         c = self.ctx; phs = c["phases"]; cvs, note = self._subset(_k or phs[0]["key"]); n = len(cvs)

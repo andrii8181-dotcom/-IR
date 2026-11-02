@@ -237,28 +237,36 @@ class PhenologyWindow:
     # ── побудова ──
     def _build(self):
         w = self.win
-        mb = tk.Menu(w); fm = tk.Menu(mb, tearoff=0)
+        mb = tk.Menu(w)
+        fm = tk.Menu(mb, tearoff=0)
         fm.add_command(label="Відкрити проєкт…", command=self.open_project); fm.add_command(label="Зберегти проєкт…", command=self.save_project)
         fm.add_separator(); fm.add_command(label="Дати в Excel…", command=self.export_excel); fm.add_command(label="Бланк для поля (Word)…", command=self.blank_form)
-        mb.add_cascade(label="Файл", menu=fm); w.config(menu=mb)
+        mb.add_cascade(label="Файл", menu=fm)
+        dm = tk.Menu(mb, tearoff=0)
+        dm.add_command(label="З польового журналу…", command=self.import_journal); dm.add_command(label="З Excel…", command=self.import_excel)
+        dm.add_command(label="Вставити з буфера (Ctrl+V у клітинці)", command=self.paste_clipboard)
+        dm.add_separator(); dm.add_command(label="Обходи: % рослин у фазі…", command=self.open_visits)
+        mb.add_cascade(label="Дані", menu=dm)
+        sm_ = tk.Menu(mb, tearoff=0)
+        sm_.add_command(label="Фази культури…", command=self.edit_phases); sm_.add_command(label="Групи стиглості й їхні стандарти…", command=self.open_groups)
+        sm_.add_command(label="Погода для сум температур…", command=self.open_weather)
+        mb.add_cascade(label="Налаштування", menu=sm_)
+        w.config(menu=mb)
+        # ── головне – на видноті: аналіз, звідки дані, культура, стандарт ──
         tb = tk.Frame(w, padx=6, pady=4); tb.pack(fill=tk.X)
         def sep(f): ttk.Separator(f, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=2)
-        def grp(f, t): tk.Label(f, text=t, font=("Times New Roman", 9, "bold"), fg="#1a4b8c").pack(side=tk.LEFT, padx=(0, 4))
         tk.Button(tb, text="▶ Аналіз", bg="#c62828", fg="white", font=("Times New Roman", 13), command=self._run).pack(side=tk.LEFT, padx=4)
-        sep(tb); grp(tb, "Культура:")
+        sep(tb)
+        tk.Button(tb, text="📂 З польового журналу…", font=RF, bg="#2e7d32", fg="white", command=self.import_journal).pack(side=tk.LEFT, padx=2)
+        tk.Button(tb, text="📥 Excel…", font=RF, command=self.import_excel).pack(side=tk.LEFT, padx=2)
+        sep(tb); tk.Label(tb, text="Культура:", font=RB, fg="#1a4b8c").pack(side=tk.LEFT, padx=(0, 4))
         self.preset_var = tk.StringVar(value=P.PRESETS["pome"]["name"])
-        cb = ttk.Combobox(tb, textvariable=self.preset_var, values=[P.PRESETS[k]["name"] for k in P.PRESET_ORDER], state="readonly", width=40); cb.pack(side=tk.LEFT, padx=2)
+        cb = ttk.Combobox(tb, textvariable=self.preset_var, values=[P.PRESETS[k]["name"] for k in P.PRESET_ORDER], state="readonly", width=34); cb.pack(side=tk.LEFT, padx=2)
         cb.bind("<<ComboboxSelected>>", self._on_preset)
-        tk.Button(tb, text="✎ Фази…", font=RF, command=self.edit_phases).pack(side=tk.LEFT, padx=3)
+        tk.Label(tb, text="  Стандарт:", font=RB, fg="#1a4b8c").pack(side=tk.LEFT); self.std_var = tk.StringVar()
+        self.std_cb = ttk.Combobox(tb, textvariable=self.std_var, state="readonly", width=22, postcommand=self._refresh_std); self.std_cb.pack(side=tk.LEFT, padx=3)
+        self.std_cb.bind("<<ComboboxSelected>>", lambda e: setattr(self, "standard", "" if self.std_var.get() == "(середнє за сортами)" else self.std_var.get()))
         tk.Button(tb, text="📚 Довідка", bg="#1a4b8c", fg="white", font=RF, command=self._show_help).pack(side=tk.RIGHT, padx=6)
-        tbd = tk.Frame(w, padx=6, pady=2); tbd.pack(fill=tk.X); grp(tbd, "Дані:")
-        tk.Button(tbd, text="Вставити з буфера", font=RF, command=self.paste_clipboard).pack(side=tk.LEFT, padx=2)
-        tk.Button(tbd, text="📥 Excel…", font=RF, command=self.import_excel).pack(side=tk.LEFT, padx=2)
-        tk.Button(tbd, text="📂 З польового журналу…", font=RF, command=self.import_journal).pack(side=tk.LEFT, padx=2)
-        tk.Button(tbd, text="📋 Облік за візитами…", font=RF, command=self.open_visits).pack(side=tk.LEFT, padx=2)
-        sep(tbd); grp(tbd, "Додатково:")
-        tk.Button(tbd, text="🌦 Погода…", font=RF, command=self.open_weather).pack(side=tk.LEFT, padx=2)
-        tk.Button(tbd, text="🖨 Бланк для поля", font=RF, command=self.blank_form).pack(side=tk.LEFT, padx=2)
         tb2 = tk.Frame(w, padx=6); tb2.pack(fill=tk.X); self._tb2 = tb2
         self.pagebar = tk.Frame(w, padx=6, pady=2, bg="#fff3e0")
         self.pg_lbl = tk.Label(self.pagebar, bg="#fff3e0", font=RF, fg="#8c5a1a")
@@ -270,19 +278,28 @@ class PhenologyWindow:
         tk.Button(self.pagebar, text="Перейти", font=SM, command=self.goto_row).pack(side=tk.LEFT)
         tk.Label(self.pagebar, text="  (усі рядки беруть участь в аналізі; Enter внизу сторінки – на наступну)", bg="#fff3e0", font=SM, fg="#777").pack(side=tk.LEFT, padx=8)
         tk.Label(tb2, text="Роки:", font=RB, fg="#1a4b8c").pack(side=tk.LEFT, padx=(0, 4)); self.years_bar = tk.Frame(tb2); self.years_bar.pack(side=tk.LEFT)
-        tk.Label(tb2, text="   Стандарт:", font=RF).pack(side=tk.LEFT); self.std_var = tk.StringVar()
-        self.std_cb = ttk.Combobox(tb2, textvariable=self.std_var, state="readonly", width=24, postcommand=self._refresh_std); self.std_cb.pack(side=tk.LEFT, padx=3)
-        self.std_cb.bind("<<ComboboxSelected>>", lambda e: setattr(self, "standard", "" if self.std_var.get() == "(середнє за сортами)" else self.std_var.get()))
-        tk.Button(tb2, text="👥 Групи стиглості…", font=RF, command=self.open_groups).pack(side=tk.LEFT, padx=(4, 2))
-        self.groups_lbl = tk.Label(tb2, text="", font=SM, fg="#1a4b8c"); self.groups_lbl.pack(side=tk.LEFT)
-        tk.Label(tb2, text="  ранній/пізній при різниці ≥", font=RF).pack(side=tk.LEFT); self.thr_var = tk.StringVar(value="3")
-        tk.Entry(tb2, textvariable=self.thr_var, width=4, font=RF).pack(side=tk.LEFT); tk.Label(tb2, text="діб", font=RF).pack(side=tk.LEFT)
+        self.groups_lbl = tk.Label(tb2, text="", font=SM, fg="#1a4b8c"); self.groups_lbl.pack(side=tk.LEFT, padx=(12, 0))
+        self.weather_lbl = tk.Label(tb2, text="", font=SM, fg="#1a6b8c"); self.weather_lbl.pack(side=tk.LEFT, padx=(12, 0))
+        self.thr_var = tk.StringVar(value="3")                     # поріг «ранній / пізній» змінюється у вікні результатів
         self.status = tk.Label(w, text="", font=SM, fg="#555", anchor="w"); self.status.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(0, 4))
         tk.Label(w, text="Дата: 12.05 · 1205 · 12 травня · «т» – сьогодні. Подвійний клік – календар; Ctrl+D – дата з клітинки вище; Ctrl+V – вставка блоку з Excel.", font=SM, fg="#666").pack(side=tk.BOTTOM, anchor="w", padx=10)
         body = tk.Frame(w); body.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
         self.cv = tk.Canvas(body, highlightthickness=0); vs = ttk.Scrollbar(body, orient="vertical", command=self.cv.yview); hs = ttk.Scrollbar(body, orient="horizontal", command=self.cv.xview)
         self.cv.configure(yscrollcommand=vs.set, xscrollcommand=hs.set); vs.pack(side=tk.RIGHT, fill=tk.Y); hs.pack(side=tk.BOTTOM, fill=tk.X); self.cv.pack(fill=tk.BOTH, expand=True)
         self.gf = tk.Frame(self.cv); self.cv.create_window((0, 0), window=self.gf, anchor="nw"); self.gf.bind("<Configure>", lambda e: self.cv.configure(scrollregion=self.cv.bbox("all")))
+        self.hint = tk.Label(body, justify="left", font=("Times New Roman", 12), fg="#1a4b8c", bg="#f4f8fc", relief=tk.GROOVE, bd=1, padx=18, pady=12,
+                             text="Як почати\n\n1. Дослід ведеться в польовому журналі? Натисніть «📂 З польового журналу…» – дані підтягнуться самі.\n"
+                                  "    Або впишіть дані тут: оберіть культуру й упишіть у першому стовпчику сорти, а в стовпчиках фаз – дати\n"
+                                  "    (12.05, 1205, «12 травня»; кілька рядків одного сорту – повторності).\n"
+                                  "2. Оберіть стандарт – сорт, з яким порівнювати.\n"
+                                  "3. Натисніть «▶ Аналіз».\n\n"
+                                  "Решта – у меню «Дані» (Excel, обходи з % рослин у фазі) і «Налаштування» (фази, групи стиглості, погода).\n\n"
+                                  "(клацніть по підказці, щоб сховати її)")
+        self._hint_dismissed = False
+        def _dismiss(e=None):
+            self._hint_dismissed = True; self.hint.place_forget()
+            if self.entries: self.entries[0][COL_NAME].focus_set()
+        self.hint.bind("<Button-1>", _dismiss)
         self.cv.bind("<MouseWheel>", lambda e: self.cv.yview_scroll(int(-e.delta / 120), "units"))
         self.menu = tk.Menu(w, tearoff=0)
         for lab, cmd in (("Сьогодні", self._cell_today), ("Дата з клітинки вище", self._cell_fill_down), ("Календар…", self._cell_calendar), ("Очистити клітинку", self._cell_clear)): self.menu.add_command(label=lab, command=cmd)
@@ -440,7 +457,17 @@ class PhenologyWindow:
                 else: self._cell_color(e, BG_OK)
                 prev = d
         self.status.configure(text=f"Рік {self.cur_year}: сортів {len(names)}, дат {nfill}" + (f" (на сторінці {self.page + 1})" if self._paged_mode else "") + (f", помилок {nerr}" if nerr else "") + (f", попереджень {nwarn}" if nwarn else ""), fg="#c62828" if nerr else ("#8c5a1a" if nwarn else "#555"))
+        self._update_hint(bool(names) or nfill > 0 or any(rows for y_, rows in self.years_data.items() if y_ != self.cur_year))   # поточна таблиця – як на екрані
         return nerr, nwarn
+
+    def _update_hint(self, has_data):
+        """Підказка «Як почати» – лише поки таблиця порожня."""
+        if not hasattr(self, "hint"): return
+        if has_data or getattr(self, "_hint_dismissed", False): self.hint.place_forget()
+        else: self.hint.place(relx=0.5, rely=0.42, anchor="center")
+
+    def _update_weather_label(self):
+        self.weather_lbl.configure(text=(f"🌦 погода підключена: {self.weather_note}" if self.series is not None else ""))
 
     # ── дії над клітинкою ──
     def _cur_entry(self):
@@ -595,7 +622,7 @@ class PhenologyWindow:
         self._write_grid(self.years_data.get(self.cur_year, [])); self._update_years(); self._validate_all(); self._update_groups_label()
         return f"Прочитано рядків: {n}; років: {len(years_seen) or 1}; розпізнано фаз: {len(pmap)}." + (f"\nНе розпізнано стовпці: {', '.join(ignored)}." if ignored else "")
 
-    def import_journal(self, years_json=None):
+    def import_journal(self, years_json=None, quiet=False):
         """Фенофази з польового журналу схеми досліду (усі роки): сорти, повторності, дати; набір фаз – як у журналі."""
         import sad_phenology_journal as PJ
         if years_json is None:
@@ -616,7 +643,8 @@ class PhenologyWindow:
         msg = (f"З журналу перенесено: років {len(res['years_data'])}, сортів {len(res['cultivars'])} (фактор «{res['factor']}»), дат фенофаз {res['n_dates']}. "
                "Кілька рослин ділянки зведено в одну дату (медіана).") + (f"\nСтандарт зі схеми: {res['standards'][0]}." if res.get("standards") else "") + \
               (f" Групи стиглості: {len(set(res['groups'].values()))}." if res.get("groups") else "") + ("\n" + "\n".join(res["notes"]) if res["notes"] else "")
-        messagebox.showinfo("Польовий журнал", msg, parent=self.win); return res
+        if not quiet: messagebox.showinfo("Польовий журнал", msg, parent=self.win)
+        self._from_journal_msg = msg; return res
 
     def export_excel(self, path=None):
         path = path or filedialog.asksaveasfilename(parent=self.win, defaultextension=".xlsx", initialfile="фенологія_дати.xlsx", filetypes=[("Excel", "*.xlsx")], title="Дати в Excel")
@@ -673,7 +701,7 @@ class PhenologyWindow:
 
     def _update_groups_label(self):
         ng = len(set(self.groups.values())); ns = len(self.group_std)
-        self.groups_lbl.configure(text=(f"груп: {ng}, стандартів груп: {ns}" if ng else ""))
+        self.groups_lbl.configure(text=(f"групи стиглості: {ng} (стандартів груп: {ns})" if ng else ""))
 
     def _run(self):
         self._save_current(); self._validate_all()
@@ -687,7 +715,7 @@ class PhenologyWindow:
             lst = "\n".join(f"• {w['year']}, {w['name']}: {w['msg']}" for w in ctx["warnings"][:6])
             if not messagebox.askyesno("Попередження", f"Знайдено підозрілих дат: {len(ctx['warnings'])} (оранжеві клітинки).\n\n{lst}\n\nПродовжити аналіз?", parent=self.win): return None
         from sad_phenology_results import PhenologyResults
-        self.results_win = PhenologyResults(self.win, ctx, P.PRESETS[self.preset_key]["name"]); return ctx
+        self.results_win = PhenologyResults(self.win, ctx, P.PRESETS[self.preset_key]["name"], on_thr=lambda v: self.thr_var.set(f"{v:g}")); return ctx
 
     # ── проєкт ──
     def project(self):

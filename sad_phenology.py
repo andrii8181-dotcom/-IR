@@ -707,5 +707,5 @@ def analyze(years_data, phases, standard="", thr=3.0, series=None, sum_cfg=None,
         nan_sums = sum(1 for r in lst if math.isnan(r["sum"])); sums = summarize_sums(lst, cultivars, wk)
     return {"records": recs, "errors": errs, "warnings": warns, "cultivars": cultivars, "phases": with_data, "all_phases": phases, "summ": summ, "pairs": pairs, "dur": dur,
             "vs": vs, "ref": ref, "standard": std, "thr": thr, "groups": grp, "group_std": gstd, "ref_of": ref_of,
-            "standards": sorted(({std} if std else set()) | set(gstd.values())), "anova": anovas, "compare": compare, "method": method, "sums": sums, "sum_cfg": sum_cfg if sums is not None else None, "nan_sums": nan_sums,
+            "standards": sorted(({std} if std else set()) | set(gstd.values())), "anova": anovas, "compare": compare, "method": method, "sums": sums, "sum_cfg": sum_cfg if sums is not None else None, "nan_sums": nan_sums, "series": series,
             "years": sorted({r["year"] for r in recs}), "n_obs": len(recs)}

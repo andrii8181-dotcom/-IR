@@ -69,6 +69,7 @@ class WeatherDialog:
 
     def _set(self, ser, note):
         self.o.series = ser; self.o.weather_note = f"{note}: {len(ser)} діб, {ser.dates[0]:%d.%m.%Y} – {ser.dates[-1]:%d.%m.%Y}"; self.info.configure(text=self.o.weather_note)
+        getattr(self.o, "_update_weather_label", lambda: None)()
 
     def from_weather_window(self):
         import sad_weather as SW
@@ -89,6 +90,7 @@ class WeatherDialog:
 
     def clear(self):
         self.o.series = None; self.o.weather_note = ""; self.info.configure(text="Погода не підключена.")
+        getattr(self.o, "_update_weather_label", lambda: None)()
 
     def apply(self):
         try: base = float(self.base.get().replace(",", "."))
