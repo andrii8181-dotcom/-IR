@@ -28,18 +28,28 @@ def put(w, i, j, text):
 def cell(w, i, j): return w.entries[i][j].get()
 def bg(w, i, j): return str(w.entries[i][j].cget("bg"))
 def pj(w, key): return PW.COL0 + [p["key"] for p in w.phases].index(key)
+def tab_named(rw_, name):
+    names = [rw_.nb.tab(t_, "text") for t_ in rw_.nb.tabs()]; return rw_.nb.nametowidget(rw_.nb.tabs()[names.index(name)])
 
 print("== 1. Вікно: початковий стан і панель")
 w = PW.PhenologyWindow(root); w.win.geometry("1260x760+0+0"); root.update()
 check(w.preset_key == "pome" and len(w.phases) == 15 and w.cur_year == dt.date.today().year and list(w.years_data) == [w.cur_year], "за замовчуванням: яблуня/груша, 15 фаз, поточний рік")
 check(len(w.entries) >= 24 and len(w.entries[0]) == 2 + 15 and [h.cget("text") for h in w.hdr][:3] == ["Сорт / варіант", "Повт.", "Початок набрякання бруньок (01)"], "таблиця: сорт, повторність і 15 фаз із кодами BBCH у заголовках")
 btns = [b for b in all_w(w.win) if b.winfo_class() == "Button" and b.winfo_ismapped() and b.master.master is w.win or False]
-tbs = [c for c in w.win.winfo_children() if c.winfo_class() == "Frame"][:2]
+tbs = [c for c in w.win.winfo_children() if c.winfo_class() == "Frame"][:1]
 vb = [b for f_ in tbs for b in all_w(f_) if b.winfo_class() == "Button"]
-check(all(b.winfo_ismapped() and b.winfo_rootx() + b.winfo_width() <= w.win.winfo_rootx() + w.win.winfo_width() + 2 for b in vb) and len(vb) == 9, f"усі кнопки двох рядків панелі ({len(vb)}) вміщуються у вікні шириною 1260 px")
-ovl = [(a.cget("text")[:12], b.cget("text")[:12]) for i, a in enumerate(vb) for b in vb[i + 1:] if not (a.winfo_rootx() + a.winfo_width() <= b.winfo_rootx() or b.winfo_rootx() + b.winfo_width() <= a.winfo_rootx() or a.winfo_rooty() + a.winfo_height() <= b.winfo_rooty() or b.winfo_rooty() + b.winfo_height() <= a.winfo_rooty())]
-check(not ovl, f"кнопки не накладаються ({len(ovl)})")
-txts = [b.cget("text") for b in vb]; check(all(any(x in t for t in txts) for x in ("Аналіз", "Фази", "Вставити з буфера", "Excel", "польового журналу", "візитами", "Погода", "Бланк", "Довідка")), "є всі дії: аналіз, фази, буфер, Excel, візити, погода, бланк, довідка")
+check(all(b.winfo_ismapped() and b.winfo_rootx() + b.winfo_width() <= w.win.winfo_rootx() + w.win.winfo_width() + 2 for b in vb), f"усі кнопки панелі ({len(vb)}) вміщуються у вікні шириною 1260 px")
+txts = [b.cget("text") for b in vb]; check(txts == ["▶ Аналіз", "📂 З польового журналу…", "📥 Excel…", "📚 Довідка"], f"на видноті лише головне: аналіз, журнал, Excel, довідка: {txts}")
+check(len([c for c in all_w(tbs[0]) if c.winfo_class() == "TCombobox"]) == 2, "на панелі – вибір культури й стандарту")
+mbar = w.win.nametowidget(w.win.cget("menu"))
+def _ml(m_): return [m_.entrycget(i_, "label") for i_ in range(m_.index("end") + 1) if m_.type(i_) not in ("tearoff", "separator")]
+tops = _ml(mbar); check(tops == ["Файл", "Дані", "Налаштування"], f"меню: {tops}")
+sub = {tops[i_]: _ml(mbar.nametowidget(mbar.entrycget(i_ + (1 if mbar.type(0) == "tearoff" else 0), "menu"))) for i_ in range(3)}
+check(any("журналу" in x for x in sub["Дані"]) and any("Excel" in x for x in sub["Дані"]) and any("буфера" in x for x in sub["Дані"]) and any("Обходи" in x for x in sub["Дані"]), f"меню «Дані»: {sub['Дані']}")
+check(any("Фази" in x for x in sub["Налаштування"]) and any("Групи стиглості" in x for x in sub["Налаштування"]) and any("Погода" in x for x in sub["Налаштування"]), f"меню «Налаштування»: {sub['Налаштування']}")
+check(any("Бланк" in x for x in sub["Файл"]) and any("проєкт" in x for x in sub["Файл"]), "меню «Файл»: проєкт, бланк, Excel")
+check(not any("ранній/пізній" in str(x.cget("text")) for x in all_w(w.win) if x.winfo_class() == "Label"), "поріг «ранній/пізній» прибрано з головного вікна (він у вікні результатів)")
+check(w.hint.winfo_manager() == "place" and "Як почати" in w.hint.cget("text") and "З польового журналу" in w.hint.cget("text"), "у порожній таблиці – підказка «Як почати» з кроками")
 check("Рік" in w.status.cget("text") and "сортів 0" in w.status.cget("text"), f"рядок стану: «{w.status.cget('text')}»")
 
 print("\n== 2. Введення дат: розбір, нормалізація, кольори")
@@ -141,25 +151,25 @@ def mkrows(y, extra):
 wa.years_data = {2024: mkrows(2024, 0), 2025: mkrows(2025, 2)}; wa._write_grid(wa.years_data[2024]); wa._update_years(); wa.std_var.set("Голден"); wa.standard = "Голден"; wa.thr_var.set("3"); root.update()
 LOG["ask"].clear(); ctx = wa._run(); root.update(); rw = wa.results_win
 check(ctx is not None and rw is not None and rw.win.winfo_exists() and not LOG["ask"], "аналіз виконано без запитань (дати коректні)")
-tabs = [rw.nb.tab(t, "text") for t in rw.nb.tabs()]; check(tabs == ["Середні дати", "Стандарт і групи", "Тривалість періодів", "ANOVA і порівняння середніх", "Графіки"], f"вкладки: {tabs}")
+tabs = [rw.nb.tab(t, "text") for t in rw.nb.tabs()]; check(tabs == ["Висновки", "Середні дати", "Стандарт і групи", "Тривалість періодів", "ANOVA і порівняння середніх", "Графіки"], f"вкладки: {tabs}")
 check(ctx["cultivars"] == ["Голден", "Гала", "Фуджі", "Айдаред"] and ctx["years"] == [2024, 2025] and ctx["n_obs"] == 4 * 3 * 2 * 4, "4 сорти × 3 повторності × 2 роки × 4 фази = 96 спостережень")
-rw.nb.select(0); tvs = [x for x in all_w(rw.nb.nametowidget(rw.nb.tabs()[0])) if x.winfo_class() == "Treeview"]; rows = [tvs[0].item(i, "values") for i in tvs[0].get_children()]
+rw.nb.select(tab_named(rw, "Середні дати")); tvs = [x for x in all_w(tab_named(rw, "Середні дати")) if x.winfo_class() == "Treeview"]; rows = [tvs[0].item(i, "values") for i in tvs[0].get_children()]
 check(rows[0][0] == "Голден" and rows[0][1] == "6" and all(r[2].count(".") == 1 for r in rows), f"«Середні дати»: рядок Голден, n = 6: {rows[0][:4]}")
 mean_g = np.mean([P.doy_norm(P.parse_date_flex(r["dates"]["bloom0"], y)[0]) for y, rr in wa.years_data.items() for r in rr if r["name"] == "Голден"]); check(rows[0][2].startswith(P.md_from_doy(mean_g)), f"середня дата початку цвітіння Голден збігається з ручним розрахунком ({P.md_from_doy(mean_g)})")
 check("±" in rows[0][2], "SD (±) показано")
 check(str(tvs[0].item(tvs[0].get_children()[0], "tags")) in ("('std',)", "std") , "рядок стандарту виділено")
-t2 = rw.nb.nametowidget(rw.nb.tabs()[1]); tv2 = [x for x in all_w(t2) if x.winfo_class() == "Treeview"]; r2 = [tv2[0].item(i, "values") for i in tv2[0].get_children()]
+t2 = tab_named(rw, "Стандарт і групи"); tv2 = [x for x in all_w(t2) if x.winfo_class() == "Treeview"]; r2 = [tv2[0].item(i, "values") for i in tv2[0].get_children()]
 check(r2[0][bloom_i] == "станд." if (bloom_i := 4) else True, "«Стандарт і групи»: стандарт позначено «станд.»") if len(r2[0]) > 4 else check(False, "таблиця відмінностей")
 check(r2[2][4].startswith("+") and float(r2[2][4].replace("+", "").replace(",", ".")) > 5, f"Фуджі пізніше стандарту на ~8 діб: {r2[2][4]}")
 grp = [tv2[1].item(i, "values") for i in tv2[1].get_children()]; check([g[0] for g in grp][0] == "Голден" and grp[0][3] == "середній" and grp[-1][3] == "пізній", f"групування за ключовою фазою ({rw.key_var.get()[:24]}): {[(g[0], g[3]) for g in grp]}")
 rw.key_var.set([l for l in rw._key_labels if "Початок цвітіння" in l][0]); rw._fill_groups(); root.update(); grp2 = [x for x in all_w(rw.group_holder) if x.winfo_class() == "Treeview"][0]; check(len(grp2.get_children()) == 4, "зміна ключової фази перебудовує таблицю груп")
-t4 = rw.nb.nametowidget(rw.nb.tabs()[3]); tv4 = [x for x in all_w(t4) if x.winfo_class() == "Treeview"]; ov = [tv4[0].item(i, "values") for i in tv4[0].get_children()]
+t4 = tab_named(rw, "ANOVA і порівняння середніх"); tv4 = [x for x in all_w(t4) if x.winfo_class() == "Treeview"]; ov = [tv4[0].item(i, "values") for i in tv4[0].get_children()]
 check(len(ov) == 4 and all(o[6] == "істотна" for o in ov) and ov[0][5].startswith("RCBD") and ov[0][7].startswith("НІР05"), f"ANOVA: вплив сорту істотний у всіх 4 фазах, схема {ov[0][5]}, метод за замовчуванням для 4 сортів – «{ov[0][7]}»")
 check(all(o[4] != "–" for o in ov) and float(ov[0][4].replace(",", ".")) > 0 and all(0 <= float(o[3].replace(",", ".")) <= 1 for o in ov), f"НІР05 розраховано (початок цвітіння: {ov[0][4]} діб), H² у межах 0–1: {[o[3] for o in ov]}")
 lt = [tv4[1].item(i, "values") for i in tv4[1].get_children()]; check(lt[0][1].endswith(" a") and lt[2][1].split()[-1] != "a", f"літери: найраніший Голден – «a», Фуджі – інша: {[l[1] for l in lt]}")
 det = [tv4[2].item(i, "values") for i in tv4[2].get_children()]; check([d[0] for d in det] == ["Блоки", "Фактор A", "Фактор Y", "Фактор A×Y", "Залишок", "Загальна"], f"таблиця ANOVA (кілька років): {[d[0] for d in det]}")
 rw.an_var.set([l for l in rw._an_labels if "Знімна" in l][0]); rw._fill_anova(); root.update(); det2 = [x for x in all_w(rw.an_holder) if x.winfo_class() == "Treeview"][0]; check(len(det2.get_children()) == 6, "зміна фази в селекторі ANOVA оновлює таблицю")
-tdur = rw.nb.nametowidget(rw.nb.tabs()[2]); tvd = [x for x in all_w(tdur) if x.winfo_class() == "Treeview"][0]; dr = [tvd.item(i, "values") for i in tvd.get_children()]
+tdur = tab_named(rw, "Тривалість періодів"); tvd = [x for x in all_w(tdur) if x.winfo_class() == "Treeview"][0]; dr = [tvd.item(i, "values") for i in tvd.get_children()]
 check(len(tvd["columns"]) == 1 + len(ctx["pairs"]) and "→" in tvd.heading(tvd["columns"][1], "text") and dr[0][1].startswith("4,0"), f"тривалість: колонки {len(tvd['columns'])}, початок→масове = {dr[0][1]}")
 print("   вибір методу порівняння середніх:")
 cbm = [x for x in all_w(t4) if x.winfo_class() == "TCombobox" and "НІР05 (Фішер)" in str(x.cget("values"))][0]
@@ -205,7 +215,7 @@ for y_, sh_ in ((2024, 0), (2025, 2)):
 phb = [{"key": "bloom0", "name": "Початок цвітіння", "bbch": "61", "hint": ""}, {"key": "pick", "name": "Знімна стиглість", "bbch": "87", "hint": ""}]
 t0 = _tm.time(); cb_ = P.analyze(ydb, phb, standard="G000", thr=3.0); rb_ = PR.PhenologyResults(root, cb_, "Гібриди"); root.update(); tb_ = _tm.time() - t0
 check(tb_ < 25, f"аналіз і відкриття вікна результатів для 300 гібридів × 2 роки × 3 повторності × 2 фази: {tb_:.1f} с")
-tabs_b = [rb_.nb.tab(t_, "text") for t_ in rb_.nb.tabs()]; check(tabs_b[3] == "ANOVA і порівняння середніх", "усі вкладки на місці")
+tabs_b = [rb_.nb.tab(t_, "text") for t_ in rb_.nb.tabs()]; check("ANOVA і порівняння середніх" in tabs_b and tabs_b[0] == "Висновки", "усі вкладки на місці (першою – «Висновки»)")
 tvb = [x for x in all_w(rb_.an_body) if x.winfo_class() == "Treeview"]; ovb = [tvb[0].item(i, "values") for i in tvb[0].get_children()]
 check(rb_.method_var.get() == P.METHOD_NAME["auto"] and all("Скотт–Кнотт" in o[7] and "гр.)" in o[7] for o in ovb), f"для 300 сортів автоматично Скотт–Кнотт: «{ovb[0][7]}»")
 check(len(tvb[1].get_children()) == 300 and tvb[1].item(tvb[1].get_children()[0], "values")[1].split()[-1] == "a", "таблиця середніх містить усі 300 сортів із групами; найраніші – «a»")
@@ -214,7 +224,7 @@ rb_.method_var.set(P.METHOD_NAME["tukey"]); t0 = _tm.time(); rb_._on_method(); r
 check(tk_ < 20 and "нечитабельні" in " ".join(str(x.cget("text")) for x in all_w(rb_.an_body) if x.winfo_class() == "Label"), f"Тьюкі для 300 сортів: перерахунок {tk_:.1f} с; пояснення, чому літер немає")
 rb_.method_var.set(P.METHOD_NAME["control"]); rb_._on_method(); root.update(); tvb = [x for x in all_w(rb_.an_body) if x.winfo_class() == "Treeview"]; first_ = tvb[1].item(tvb[1].get_children()[0], "values")[1]
 check("станд." in first_ or any("станд." in tvb[1].item(i, "values")[1] for i in tvb[1].get_children()), "300 сортів зі стандартом: позначки в таблиці"); rb_.method_var.set(P.METHOD_NAME["kw"]); t0 = _tm.time(); rb_._on_method(); root.update(); check(_tm.time() - t0 < 25, f"Краскел–Уолліс для 300 сортів: {_tm.time() - t0:.1f} с")
-rb_.method_var.set(P.METHOD_NAME["auto"]); rb_._on_method(); rb_.nb.select(4); kb = rb_._cp_labels
+rb_.method_var.set(P.METHOD_NAME["auto"]); rb_._on_method(); rb_.nb.select(tab_named(rb_, "Графіки")); kb = rb_._cp_labels
 for kind, frag in ((0, r"показано \d+ із 300"), (1, r"показано \d+ із 300"), (2, r"показано \d+ із 300"), (3, r"показано \d+ із 300")):
     rb_.chart_var.set(PR.CHARTS[kind]); rb_.cphase_var.set([l for l in kb if "Початок цвітіння" in l][0]); t0 = _tm.time(); rb_._draw(); root.update()
     ttl = " ".join([a.get_title() for a in rb_.fig.axes] + [a.get_title(loc="left") for a in rb_.fig.axes]); mm_ = __import__("re").search(frag, ttl); check(mm_ is not None and 25 <= int(mm_.group(0).split()[1]) <= 30 and _tm.time() - t0 < 15, f"графік «{PR.CHARTS[kind][:24]}…» для 300 сортів: «{mm_.group(0) if mm_ else None}» ({_tm.time() - t0:.1f} с)")
@@ -285,7 +295,7 @@ put(wb_, 0, pj(wb_, "bloom0"), ""); put(wb_, 0, pj(wb_, "bloom50"), "20.05"); pu
 check(r3 is None and "підозрілих дат" in LOG["ask"][-1][1] and "раніше за попередню" in LOG["ask"][-1][1], "порушення порядку фаз: попередження зі списком; «ні» – аналіз скасовано")
 ASK["ans"] = True; r4 = wb_._run(); check(r4 is not None, "«так» – аналіз усе одно виконується"); wb_.results_win.win.destroy()
 wc = PW.PhenologyWindow(root); root.update(); put(wc, 0, 0, "A"); put(wc, 0, pj(wc, "bloom0"), "10.05"); put(wc, 1, 0, "B"); put(wc, 1, pj(wc, "bloom0"), "12.05"); rc = wc._run()
-check(rc is not None and "error" in rc["anova"]["bloom0"], "один результат на сорт: аналіз виконується, ANOVA показує пояснення замість таблиці"); tc = [x for x in all_w(wc.results_win.nb.nametowidget(wc.results_win.nb.tabs()[3])) if x.winfo_class() == "Label" and "повторностей" in str(x.cget("text"))]
+check(rc is not None and "error" in rc["anova"]["bloom0"], "один результат на сорт: аналіз виконується, ANOVA показує пояснення замість таблиці"); tc = [x for x in all_w(tab_named(wc.results_win, "ANOVA і порівняння середніх")) if x.winfo_class() == "Label" and "повторностей" in str(x.cget("text"))]
 check(True, "ANOVA без повторностей – без винятків"); wc.results_win.win.destroy()
 
 print("\n== 8. Погода й суми температур")
@@ -372,7 +382,8 @@ wg = PW.PhenologyWindow(root); root.update(); wg.cur_year = 2025; wg.years_data 
 effx = {"Ранній ст.": 0, "Р1": 0, "Р2": 4, "Пізній ст.": 20, "П1": 20, "П2": 15}
 wg.years_data[2025] = [{"name": c, "rep": str(r), "dates": {"bloom0": P.fmt_date(D(2025, 4, 25) + dt.timedelta(days=e + rgx.choice((-1, 0, 0, 1))))}} for c, e in effx.items() for r in (1, 2, 3)]
 wg._write_grid(wg.years_data[2025]); wg._update_years(); wg.std_var.set("Ранній ст."); wg.standard = "Ранній ст."; root.update()
-btg = [b for b in all_w(wg.win) if b.winfo_class() == "Button" and "Групи стиглості" in b.cget("text")]; check(len(btg) == 1, "у вікні є кнопка «👥 Групи стиглості…»")
+_mb = wg.win.nametowidget(wg.win.cget("menu")); _sm = _mb.nametowidget(_mb.entrycget([i_ for i_ in range(_mb.index("end") + 1) if _mb.type(i_) == "cascade" and _mb.entrycget(i_, "label") == "Налаштування"][0], "menu"))
+check(any("Групи стиглості" in _sm.entrycget(i_, "label") for i_ in range(_sm.index("end") + 1) if _sm.type(i_) == "command"), "групи стиглості – у меню «Налаштування»")
 gd = PD.GroupsDialog(wg.win, wg); root.update(); check([gd.tv.item(i, "values")[0] for i in gd.tv.get_children()] == list(effx), "діалог показує всі сорти з таблиці")
 check(list(gd.gcb.cget("values"))[:3] == ["ранні", "середні", "пізні"], "типові групи: ранні, середні, пізні")
 gd.assign("ранні", ["Ранній ст.", "Р1", "Р2"]); gd.paste("Сорт\tГрупа\nПізній ст.\tпізні\nП1\tпізні\nП2\tпізні\nНевідомий\tпізні\n")
@@ -386,7 +397,7 @@ check(wg.groups["П2"] == "пізні", "скасування діалогу н�
 LOG["ask"].clear(); cx = wg._run(); root.update(); rx = wg.results_win
 check(cx["ref_of"]["П2"] == "Пізній ст." and set(cx["standards"]) == {"Ранній ст.", "Пізній ст."}, "аналіз отримав групи: П2 порівнюється з пізнім стандартом")
 hdr_ = [x.cget("text") for x in all_w(rx.win) if x.winfo_class() == "Label" and "стандарти груп" in str(x.cget("text"))]; check(hdr_ and "«Пізній ст.» (пізні)" in hdr_[0], f"заголовок результатів: {hdr_[0][-70:] if hdr_ else '–'}")
-t2x = rx.nb.nametowidget(rx.nb.tabs()[1]); tvx = [x for x in all_w(t2x) if x.winfo_class() == "Treeview"][0]
+t2x = tab_named(rx, "Стандарт і групи"); tvx = [x for x in all_w(t2x) if x.winfo_class() == "Treeview"][0]
 cols_x = [tvx.heading(c_, "text") for c_ in tvx["columns"]]; rows_x = {tvx.item(i, "values")[0]: tvx.item(i, "values") for i in tvx.get_children()}
 check(cols_x[1:3] == ["Група", "Стандарт групи"] and rows_x["П2"][1] == "пізні" and rows_x["П2"][2] == "Пізній ст." and rows_x["Пізній ст."][3] == "станд.", "таблиця «Стандарт і групи»: група, стандарт групи, позначка «станд.»")
 d_p2 = float(rows_x["П2"][3].replace("−", "-").replace(",", ".")); check(-7 < d_p2 < -3, f"П2 раніше свого (пізнього) стандарту приблизно на 5 діб: {rows_x['П2'][3]}")

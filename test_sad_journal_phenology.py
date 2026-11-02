@@ -66,7 +66,7 @@ if os.environ.get("DISPLAY"):
     LOG = []
     for m in (JT.messagebox,): m.showinfo = lambda t="", msg="", **k: LOG.append(("info", msg)); m.showwarning = lambda t="", msg="", **k: LOG.append(("warn", msg)); m.askyesno = lambda *a, **k: True
     root = tk.Tk(); root.withdraw(); win = JT.FieldJournalWindow(root, {}); root.update()
-    btn = [b for b in [w for w in win.win.winfo_children()][0].winfo_children() if b.winfo_class() == "Button" and "Фенофаза" in b.cget("text")]; check(len(btn) == 1, "у журналі є кнопка «🌸 Фенофаза…»")
+    btn = [b for b in [w for w in win.win.winfo_children()][0].winfo_children() if b.winfo_class() == "Button" and "Фенологія" in b.cget("text")]; check(len(btn) == 1, "у журналі є кнопка «🌸 Фенологія…»")
     JT.filedialog.askopenfilename = lambda **k: sp; win._prompt_new_year = lambda: None; win._open_file(); win._current_year = "2025"; win._load_year("2025"); root.update()
     check(len([p for p in win.plants if p.role == JT.HP_ROLE_RECORDED]) == 27, "схема відкрита: 27 облікових дерев (3 сорти × 3 повторності × 3 дерева)")
     def save_dialog(name=None, unit=None):
@@ -115,7 +115,7 @@ if os.environ.get("DISPLAY"):
     print("\n== 4. Модуль фенології: «З польового журналу»")
     import sad_phenology_win as PW
     for m in (PW.messagebox,): m.showinfo = lambda t="", msg="", **k: LOG.append(("info", msg)); m.askyesno = lambda *a, **k: True
-    pw = PW.PhenologyWindow(root); root.update(); btj = [b for b in [x for x in pw.win.winfo_children() if x.winfo_class() == "Frame"][1].winfo_children() if b.winfo_class() == "Button" and "журналу" in b.cget("text")]
+    pw = PW.PhenologyWindow(root); root.update(); btj = [b for b in [x for x in pw.win.winfo_children() if x.winfo_class() == "Frame"][0].winfo_children() if b.winfo_class() == "Button" and "журналу" in b.cget("text")]
     check(len(btj) == 1, "у фенології є кнопка «📂 З польового журналу…»")
     JT.filedialog.askopenfilename = lambda **k: jp; out_ = pw.import_journal(); root.update()
     check(out_ is not None and sorted(pw.years_data) == [2025, 2026] and pw.preset_key == "pome", f"перенесено обидва роки, набір фаз – яблуня: {sorted(pw.years_data)}")
