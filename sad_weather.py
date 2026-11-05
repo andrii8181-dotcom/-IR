@@ -23,6 +23,36 @@ HTC_METHODS = {"Декадний облік (за методичним посі�
 SHARED = {"series": None, "place": ""}              # остання завантажена серія – для інших модулів (фенологія: суми температур до фази)
 
 
+def place_search_dialog(parent, on_pick, query=""):
+    """Пошук населеного пункту за назвою (вбудована база міст, за потреби – OpenStreetMap). on_pick({'label','lat','lon'})."""
+    dlg = tk.Toplevel(parent); dlg.title("Пошук місця за назвою"); set_icon(dlg); dlg.grab_set(); dlg.geometry("640x380"); dlg.minsize(520, 300)
+    f = tk.Frame(dlg, padx=12, pady=10); f.pack(fill=tk.BOTH, expand=True)
+    tk.Label(f, text="Назва населеного пункту (українською чи англійською):", font=RF).pack(anchor="w")
+    def pick(r):
+        W.remember_place(r["label"], r["lat"], r["lon"]); dlg.destroy(); on_pick({"label": r["label"], "lat": r["lat"], "lon": r["lon"]})
+    ps = WM.PlaceSearch(f, pick, online_search=lambda q: W.geocode(q, getter=lambda u: W.http_get(u, timeout=12)), width=40, lines=9)
+    ps.pack(fill=tk.BOTH, expand=True); ps.qv.set(query)
+    tk.Button(f, text="Обрати", font=RF, bg="#1a6b1a", fg="white", command=ps.pick).pack(pady=(6, 0))
+    center_win(dlg); ps.ent.focus_set(); dlg._ps = ps; return dlg
+
+
+class SavedPlaces(ttk.Combobox):
+    """Список раніше обраних місць; вибір – on_pick({'label','lat','lon'}). Перелік оновлюється щоразу при відкритті."""
+    def __init__(self, master, on_pick, width=34, **kw):
+        self._items = []; self.on_pick = on_pick; self.var = tk.StringVar(value="(раніше обрані місця)")
+        super().__init__(master, textvariable=self.var, state="readonly", width=width, postcommand=self.refresh, **kw)
+        self.bind("<<ComboboxSelected>>", self._sel); self.refresh()
+
+    def refresh(self):
+        self._items = W.load_places(); self.configure(values=[p["label"] for p in self._items] or ["(ще немає)"])
+
+    def _sel(self, e=None):
+        i = self.current()
+        if 0 <= i < len(self._items):
+            p = self._items[i]; W.remember_place(p["label"], p["lat"], p["lon"]); self.on_pick(dict(p))
+        self.var.set("(раніше обрані місця)")
+
+
 class WeatherWindow:
     HELP_TEXT = """
 МОДУЛЬ «ПОГОДА» – ІНСТРУКЦІЯ
@@ -52,6 +82,8 @@ class WeatherWindow:
   «🔍 Знайти за назвою»: введіть назву населеного пункту (українською чи англійською) – програма знайде його сама, у тому числі
   малі села. Сітка NASA POWER ≈ 50 км, тож точності вибору до кількох кілометрів достатньо. «✎ Ввести координати» – для тих, хто
   має точні координати ділянки.
+  Список «(раніше обрані місця)» – місця, які ви вже шукали чи для яких отримували дані (зручно, коли дослідів у різних регіонах кілька).
+  «📂 З досліду…» – місце, задане для досліду в конструкторі схеми.
 
 ВАЖЛИВО ПРО ТОЧНІСТЬ
   NASA POWER – це реаналіз для комірки сітки, а не вимірювання на вашій ділянці. Опади
@@ -234,6 +266,9 @@ class WeatherWindow:
         b = tk.Frame(f); b.pack(fill=tk.X, pady=(0, 2))
         tk.Button(b, text="🔍 Знайти за назвою…", font=("Times New Roman", 10), command=self._geocode_dlg).pack(side=tk.LEFT)
         tk.Button(b, text="✎ Ввести координати…", font=("Times New Roman", 10), command=self._coords_dlg).pack(side=tk.LEFT, padx=6)
+        b2 = tk.Frame(f); b2.pack(fill=tk.X, pady=(0, 2))
+        SavedPlaces(b2, lambda p: self._set_point(p["lat"], p["lon"], p["label"], force_label=True), width=30).pack(side=tk.LEFT)
+        tk.Button(b2, text="📂 З досліду…", font=("Times New Roman", 10), command=self._place_from_scheme).pack(side=tk.LEFT, padx=6)
         self.lat_var = tk.StringVar(); self.lon_var = tk.StringVar()
         self.coord_lbl = tk.Label(f, text="", font=("Times New Roman", 10, "bold"), justify="left", wraplength=390, anchor="w")
         self.coord_lbl.pack(anchor="w")
@@ -300,11 +335,21 @@ class WeatherWindow:
             la, lo = f"{abs(lat):.4f}".replace(".", ","), f"{abs(lon):.4f}".replace(".", ",")
             self.coord_lbl.configure(text=f"Координати: {la}° {'пн.' if lat >= 0 else 'пд.'} ш., {lo}° {'сх.' if lon >= 0 else 'зх.'} д.", fg="#1a6b1a")
 
-    def _set_point(self, lat, lon, label=""):
+    def _set_point(self, lat, lon, label="", force_label=False):
         self.lat_var.set(f"{lat:.4f}"); self.lon_var.set(f"{lon:.4f}")
         cur = self.place_var.get().strip()
-        if label and (not cur or cur == self._auto_place):
+        if label and (force_label or not cur or cur == self._auto_place):
             self.place_var.set(label); self._auto_place = label
+
+    def _place_from_scheme(self, path=None):
+        """Місце, задане для досліду в конструкторі схеми (файл схеми чи журналу)."""
+        if path is None:
+            path = filedialog.askopenfilename(parent=self.win, title="Оберіть файл схеми або журналу досліду", filetypes=[("Схема / журнал S.A.D.", "*.sadp"), ("Усі файли", "*.*")])
+            if not path: return None
+        loc = W.location_from_file(path)
+        if not loc:
+            messagebox.showinfo("Місце досліду", "У цьому досліді місце ще не задано. Його задають у конструкторі схеми (Крок 1 – «Місце досліду»).", parent=self.win); return None
+        self._set_point(loc["lat"], loc["lon"], loc["label"], force_label=True); W.remember_place(loc["label"], loc["lat"], loc["lon"]); return loc
 
     def _read_window(self):
         fixed = self.WIN_MODES.get(self.wmode_var.get())
@@ -419,7 +464,7 @@ class WeatherWindow:
         f = tk.Frame(dlg, padx=12, pady=10); f.pack(fill=tk.BOTH, expand=True)
         tk.Label(f, text="Назва населеного пункту (українською чи англійською):", font=RF).pack(anchor="w")
         def pick(r):
-            self._set_point(r["lat"], r["lon"], r["label"]); dlg.destroy()
+            self._set_point(r["lat"], r["lon"], r["label"]); W.remember_place(r["label"], r["lat"], r["lon"]); dlg.destroy()
         ps = WM.PlaceSearch(f, pick, online_search=self._online_search, width=40, lines=9)
         ps.pack(fill=tk.BOTH, expand=True); ps.qv.set(self.place_var.get().replace("м. ", "").split(",")[0])
         tk.Button(f, text="Обрати", font=RF, bg="#1a6b1a", fg="white", command=ps.pick).pack(pady=(6, 0))
@@ -663,6 +708,9 @@ class WeatherWindow:
         if len(ser) == 0:
             messagebox.showwarning("", "Джерело не повернуло жодної доби за цей період.", parent=self.win); return
         self.series = ser; self.norm = None; self.spi = None; SHARED.update(series=ser, place=self.place_var.get().strip())
+        try:                                               # місце, для якого отримано дані, – у перелік раніше обраних
+            lt, ln = W.parse_coord(self.lat_var.get(), "lat"), W.parse_coord(self.lon_var.get(), "lon"); W.remember_place(self.place_var.get().strip(), lt, ln)
+        except Exception: pass
         self.status_var.set(f"Отримано {len(ser)} діб. Дата отримання даних: {X.fmt_stamp(ser.meta.get('retrieved_at'))}")
         self._recompute(select_summary=True)
         self._update_window_preview()

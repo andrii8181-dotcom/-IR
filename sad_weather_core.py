@@ -278,6 +278,44 @@ def geocode(name, getter=None, count=8):
                     "kind": str(r.get("type") or "")})
     return out
 
+# ── Раніше обрані місця (спільні для «Погоди», конструктора схеми й фенології): %APPDATA%/SAD/places.json ──
+def places_path():
+    import os
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "SAD", "places.json")
+
+
+def load_places(path=None):
+    """Раніше обрані місця: [{'label', 'lat', 'lon'}], останні – першими. Помилки читання ігноруються."""
+    try:
+        with open(path or places_path(), "r", encoding="utf-8") as f: d = json.load(f)
+        return [{"label": str(p["label"]), "lat": float(p["lat"]), "lon": float(p["lon"])} for p in d.get("places", []) if p.get("label")]
+    except Exception:
+        return []
+
+
+def remember_place(label, lat, lon, path=None, limit=40):
+    """Додає місце на початок переліку (те саме місце – без повторів). → перелік."""
+    import os
+    label = (label or "").strip() or f"{lat:.4f}; {lon:.4f}"; lat, lon = float(lat), float(lon)
+    items = [p for p in load_places(path) if not (abs(p["lat"] - lat) < 1e-4 and abs(p["lon"] - lon) < 1e-4) and p["label"] != label]
+    items = ([{"label": label, "lat": lat, "lon": lon}] + items)[:limit]
+    try:
+        path = path or places_path(); os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f: json.dump({"places": items}, f, ensure_ascii=False, indent=1)
+    except OSError: pass
+    return items
+
+
+def location_from_file(path):
+    """Місце досліду з файла схеми чи журналу (.sadp): {'label', 'lat', 'lon'} або None."""
+    try:
+        with open(path, "r", encoding="utf-8") as f: d = json.load(f)
+        loc = (d.get("cfg") or {}).get("location") or {}
+        return {"label": str(loc.get("label") or ""), "lat": float(loc["lat"]), "lon": float(loc["lon"])}
+    except Exception:
+        return None
+
 # ═══════════════════════════════════════════════════════════════
 # 7. ВЛАСНИЙ ФАЙЛ (CSV / вставка з Excel)
 # ═══════════════════════════════════════════════════════════════

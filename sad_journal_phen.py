@@ -57,7 +57,7 @@ class PhenologyTable:
         cb = ttk.Combobox(top, textvariable=self.pv, values=[P.PRESETS[k]["name"] for k in P.PRESET_ORDER if P.PRESETS[k]["phases"]], state="readonly", width=40); cb.pack(side=tk.LEFT, padx=6)
         cb.bind("<<ComboboxSelected>>", self._on_preset)
         tk.Button(top, text="💾 Зберегти", font=RB, bg="#1a6b1a", fg="white", command=self.save).pack(side=tk.LEFT, padx=(14, 4))
-        tk.Button(top, text="📋 Обходи: % рослин у фазі…", font=RF, command=self.open_visits).pack(side=tk.LEFT, padx=4)
+        tk.Button(top, text="📊 Дата за % рослин (обходи)…", font=RF, command=self.open_visits).pack(side=tk.LEFT, padx=4)
         tk.Button(top, text="▶ Аналіз фенофаз (усі роки)", font=RB, bg="#c62828", fg="white", command=self.analyze).pack(side=tk.RIGHT, padx=4)
         tk.Label(self.win, text="Дату вписуйте, коли фаза настала: 12.05 · 1205 · «12 травня» · «т» – сьогодні; подвійний клік – календар; Enter – униз; Ctrl+D – як вище. "
                  "Таблицю можна дозаповнювати протягом усього сезону: збережене не губиться. Наведіть курсор на заголовок фази – побачите критерій BBCH.",
@@ -240,17 +240,16 @@ class VisitsJournalDialog:
     def __init__(self, parent, table):
         self.t = table; self.o = table.o
         self.store = self.o.cfg.setdefault("phen_visits", {})              # обходи поточного року – у даних журналу цього року
-        self.win = tk.Toplevel(parent); self.win.title("Обходи: % рослин у фазі"); self.win.geometry("1100x640"); self.win.transient(parent); set_icon(self.win)
-        tk.Label(self.win, text="На кожному обході запишіть, який відсоток рослин (пагонів, суцвіть) ділянки вже у фазі. Коли відсоток переходить поріг, "
-                 "програма обчислює дату настання (між двома обходами – пропорційно) і вписує її в таблицю фенології. Обходи зберігаються – продовжуйте наступного дня.",
-                 font=SM, fg="#555", wraplength=940, justify="left").pack(anchor="w", padx=10, pady=(8, 2))
+        self.win = tk.Toplevel(parent); self.win.title("Дата фази за % рослин у фазі (обходи)"); self.win.geometry("1100x700"); self.win.transient(parent); set_icon(self.win)
+        from sad_phenology_dialogs import VISITS_HELP
+        tk.Label(self.win, text=VISITS_HELP, font=SM, fg="#333", bg="#f4f8fc", wraplength=1040, justify="left", padx=8, pady=6, relief=tk.GROOVE, bd=1).pack(fill=tk.X, padx=10, pady=(8, 4))
         top = tk.Frame(self.win, padx=10); top.pack(fill=tk.X)
         tk.Label(top, text="Що обліковуєте:", font=RB).pack(side=tk.LEFT)
         self.sv = tk.StringVar(); self.scb = ttk.Combobox(top, textvariable=self.sv, width=26); self.scb.pack(side=tk.LEFT, padx=4)
         self.scb.bind("<<ComboboxSelected>>", lambda e: self._load_set())
         tk.Label(top, text="(наприклад, «Цвітіння»; можна вписати свою назву)", font=SM, fg="#666").pack(side=tk.LEFT)
         tk.Button(top, text="＋ Обхід (дата)…", font=RF, command=self.add_visit).pack(side=tk.LEFT, padx=(16, 4))
-        tg = tk.LabelFrame(self.win, text=" Що записати в таблицю фенології ", font=RB, padx=8, pady=4); tg.pack(fill=tk.X, padx=10, pady=4)
+        tg = tk.LabelFrame(self.win, text=" Яку дату записати в таблицю: фаза – і при якому % рослин вона вважається такою, що настала ", font=RB, padx=8, pady=4); tg.pack(fill=tk.X, padx=10, pady=4)
         self.phase_labels = {P.phase_label(p): p["key"] for p in table.phases}; self.targets = []
         for i in range(3):
             fr = tk.Frame(tg); fr.pack(fill=tk.X, pady=1)

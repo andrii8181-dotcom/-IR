@@ -34,7 +34,7 @@ def from_journal_years(years_json):
     """years_json: {рік (рядок/число): вміст журналу}. → dict(preset, phases, years_data, n_dates, notes, factor, cultivars).
     ValueError – у журналах немає жодного показника «дата фенофази»."""
     phase_meta = {}; preset_votes = {}; years_data = {}; n_dates = 0; notes = []; fname = None; cultivars = []
-    standards = []; groups = {}; group_std = {}
+    standards = []; groups = {}; group_std = {}; location = None
     for ys in sorted(years_json, key=lambda x: int(x)):
         d = years_json[ys]; y = int(ys); fdefs = d.get("factor_defs") or []; vnames = d.get("variant_names") or []
         fi = _cultivar_factor(fdefs); fname = fname or (fdefs[fi]["name"] if fi is not None and fdefs else "Варіант")
@@ -42,6 +42,7 @@ def from_journal_years(years_json):
         for c in cfg.get("standards") or []:
             if c not in standards: standards.append(c)
         groups.update(cfg.get("groups") or {}); group_std.update(cfg.get("group_std") or {})
+        if (cfg.get("location") or {}).get("lat") is not None: location = dict(cfg["location"])           # місце досліду з конструктора схеми
         date_recs = {nm: r for nm, r in (d.get("records") or {}).items() if r.get("kind") == "date"}
         for nm, r in date_recs.items():
             key = r.get("phase_key") or P.new_phase_key(r.get("phase_name") or nm, set())
@@ -74,4 +75,4 @@ def from_journal_years(years_json):
     if extra: notes.append(f"Фази поза набором культури додано наприкінці: {', '.join(m['name'] for m in extra)}.")
     if len(preset_votes) > 1: notes.append("У журналі фази з різних наборів культур; використано набір, якого найбільше.")
     return {"preset": preset, "phases": base + extra, "years_data": years_data, "n_dates": n_dates, "notes": notes, "factor": fname, "cultivars": cultivars,
-            "standards": standards, "groups": groups, "group_std": group_std}
+            "standards": standards, "groups": groups, "group_std": group_std, "location": location}

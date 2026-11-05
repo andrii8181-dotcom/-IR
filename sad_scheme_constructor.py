@@ -59,6 +59,10 @@ class SchemeConstructorWindow(HPResultsViewMixin):
   кожного — назву та рівні. Наприклад:
     Фактор A: Обробка ґрунту → Оранка, Без оранки
     Фактор B: Сорт → Айдаред, Голден, Джонаголд
+  «Місце досліду» (праворуч) – знайдіть населений пункт за назвою, оберіть
+  із раніше обраних або введіть координати. Місце зберігається у схемі:
+  журнал, «Погода» («📂 З досліду…») і фенологія (суми температур)
+  беруть його самі.
 
 КРОК 2. РОЗМІРИ ТАБЛИЦІ
   Той самий майстер, що й у плануванні за однорідністю — вказуєте
@@ -171,6 +175,7 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
         self._step2_open = False       # Крок 2 розблоковано (фактори задано)
         self._qr_settings = {}         # налаштування QR-табличок (код досліду тощо) – зберігаються у файлі схеми
         self._std_cfg = {"standards": [], "groups": {}, "group_std": {}}   # стандарти й групи стиглості номерів
+        self._location = None                                               # місце досліду {label, lat, lon}
         self._build()
 
     # ─────────────────────────────────────────────────────
@@ -214,6 +219,14 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
         self._factors_status = tk.Label(self._step1_frame, text="(фактори не задано)",
                                         font=("Times New Roman",9), fg="#888")
         self._factors_status.pack(side=tk.LEFT, padx=(8,0))
+        # місце досліду: зберігається у схемі, звідти – в журнал, «Погоду» й фенологію (суми температур)
+        loc = tk.Frame(self._step1_frame); loc.pack(side=tk.LEFT, padx=(30, 0))
+        tk.Label(loc, text="Місце досліду:", font=rb, fg="#1a4b8c").pack(side=tk.LEFT)
+        self._loc_lbl = tk.Label(loc, text="(не задано)", font=("Times New Roman", 10), fg="#888"); self._loc_lbl.pack(side=tk.LEFT, padx=(4, 8))
+        tk.Button(loc, text="🔍 За назвою…", font=("Times New Roman", 10), command=self._loc_search).pack(side=tk.LEFT, padx=2)
+        import sad_weather as _SW
+        _SW.SavedPlaces(loc, self._set_location, width=26).pack(side=tk.LEFT, padx=2)
+        tk.Button(loc, text="✎ Координати…", font=("Times New Roman", 10), command=self._loc_coords).pack(side=tk.LEFT, padx=2)
 
         # ── КРОК 2: Розміри (заблоковано до Кроку 1) ──────────
         self._step2_frame = tk.LabelFrame(self.win,
@@ -779,6 +792,33 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
         if not levels:
             messagebox.showwarning("Стандарти", "Схеми для багатьох номерів – для одного фактора (сорт, гібрид, номер). Залиште в Кроці 1 один фактор."); return
         StandardsDialog(self.win, levels, self._std_cfg, self._set_std_cfg)
+
+    def _set_location(self, loc):
+        """Місце досліду: {'label', 'lat', 'lon'} або None."""
+        self._location = dict(loc) if loc else None
+        if self._location:
+            import sad_weather_core as _W
+            _W.remember_place(self._location["label"], self._location["lat"], self._location["lon"])
+            self._loc_lbl.configure(text=f"{self._location['label'][:40]} ({self._location['lat']:.4f}; {self._location['lon']:.4f})", fg="#1a6b1a")
+        else:
+            self._loc_lbl.configure(text="(не задано)", fg="#888")
+
+    def _loc_search(self):
+        import sad_weather as _SW
+        return _SW.place_search_dialog(self.win, self._set_location, (self._location or {}).get("label", "").split(",")[0])
+
+    def _loc_coords(self, text=None):
+        import sad_weather_core as _W
+        if text is None:
+            cur = f"{self._location['lat']:g}; {self._location['lon']:g}" if self._location else ""
+            text = simpledialog.askstring("Координати досліду", "Широта й довгота через крапку з комою (наприклад, 48,75; 30,22):", initialvalue=cur, parent=self.win)
+            if not text: return None
+        try:
+            a, b = [x.strip() for x in text.replace(",", ".").split(";")]
+            lat, lon = _W.parse_coord(a, "lat"), _W.parse_coord(b, "lon")
+        except Exception:
+            messagebox.showwarning("Координати", "Вкажіть широту й довготу через «;», наприклад 48,75; 30,22.", parent=self.win); return None
+        self._set_location({"label": (self._location or {}).get("label") or f"{lat:.4f}; {lon:.4f}", "lat": lat, "lon": lon}); return self._location
 
     def _set_std_cfg(self, cfg):
         self._std_cfg = cfg; self._update_std_label(); self._on_area_inputs_changed()
@@ -2075,7 +2115,8 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
                     "trait_unit": getattr(self, "_trait_unit", ""),
                     **area_extra,
                     **({"qr": dict(self._qr_settings)} if self._qr_settings else {}),
-                    **self._std_cfg_for_save()},
+                    **self._std_cfg_for_save(),
+                    **({"location": dict(self._location)} if self._location else {})},
             "factor_defs": self.factor_defs,
             "variant_names": [],
             "plants": [{"row": p.row, "position": p.position, "value": p.value,
@@ -2150,6 +2191,9 @@ QR-ТАБЛИЧКИ ДЛЯ ДІЛЯНОК («🏷 QR-таблички для д�
         cfg = d.get("cfg", {})
         self._qr_settings = dict(cfg.get("qr") or {})
         self._std_cfg = {"standards": list(cfg.get("standards") or []), "groups": dict(cfg.get("groups") or {}), "group_std": dict(cfg.get("group_std") or {})}
+        self._location = None
+        try: self._set_location(cfg.get("location") if (cfg.get("location") or {}).get("lat") is not None else None)
+        except Exception: self._set_location(None)
         self._last_design_used = cfg.get("design_used", "custom")
         self._last_split_main_idx = cfg.get("split_main_idx")
         self._trait_name = cfg.get("trait_name", "")

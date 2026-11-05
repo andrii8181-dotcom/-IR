@@ -157,13 +157,20 @@ def spec_years(rep):
     ]
     cols = _opt_cols(rep, cols)
     if rep["years"] and "anom" in rep["years"][0]:
-        cols += [("Δt від норми, °C", lambda r: r["anom"]["d_tmean"], 1, "num", True),
-                 ("Δ опадів від норми, мм", lambda r: r["anom"].get("d_prec"), 0, "num", True),
-                 ("Опади, % норми", lambda r: r["anom"]["prec_pct"], 0, "num", True),
-                 ("Δ САТ >10 °C від норми", lambda r: r["anom"].get("d_sat_10"), 0, "num", True),
-                 ("Δ СЕТ від норми", lambda r: r["anom"].get("d_set"), 0, "num", False),
-                 ("Δ ГТК від норми", lambda r: r["anom"].get("d_htc"), 2, "num", True),
-                 ("Оцінка опадів", lambda r: W.precip_deviation_class(r["anom"]["prec_pct"]), None, "text", False)]
+        # відхилення від норми – одразу після свого показника (інакше вони за правим краєм широкої таблиці)
+        after = {"tсер, °C": [("Δt від норми, °C", lambda r: r["anom"]["d_tmean"], 1, "num", True)],
+                 "Опади, мм": [("Δ опадів від норми, мм", lambda r: r["anom"].get("d_prec"), 0, "num", True),
+                               ("Опади, % норми", lambda r: r["anom"]["prec_pct"], 0, "num", True),
+                               ("Оцінка опадів", lambda r: W.precip_deviation_class(r["anom"]["prec_pct"]), None, "text", False)],
+                 "САТ >10 °C": [("Δ САТ >10 °C від норми", lambda r: r["anom"].get("d_sat_10"), 0, "num", True)],
+                 "ГТК": [("Δ ГТК від норми", lambda r: r["anom"].get("d_htc"), 2, "num", True)]}
+        set_name = next((c[0] for c in cols if c[0].startswith("СЕТ (")), None)
+        if set_name: after[set_name] = [("Δ СЕТ від норми", lambda r: r["anom"].get("d_set"), 0, "num", False)]
+        new_cols = []
+        for c in cols:
+            new_cols.append(c); new_cols += after.pop(c[0], [])
+        for rest in after.values(): new_cols += rest                  # якщо базового стовпчика немає – наприкінці
+        cols = new_cols
     return {"key": "years", "title": f"Метеорологічні умови за роками (вікно {d1:02d}.{m1:02d}–{d2:02d}.{m2:02d})",
             "kind": "table", "cols": cols, "rows": rep["years"]}
 

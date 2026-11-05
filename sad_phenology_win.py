@@ -153,8 +153,8 @@ class DatePicker:
 
 class PhaseEditor:
     """Редактор списку фаз: додати, перейменувати, змінити код BBCH, порядок, видалити."""
-    def __init__(self, parent, phases, preset_phases, on_ok):
-        self.phases = [dict(p) for p in phases]; self.preset_phases = preset_phases; self.on_ok = on_ok
+    def __init__(self, parent, phases, preset_phases, on_ok, preset_key=None, on_saved=None):
+        self.phases = [dict(p) for p in phases]; self.preset_phases = preset_phases; self.on_ok = on_ok; self.preset_key = preset_key; self.on_saved = on_saved
         self.win = tk.Toplevel(parent); self.win.title("Фази"); self.win.geometry("640x520"); set_icon(self.win); self.win.transient(parent); self.win.grab_set()
         tk.Label(self.win, text="Фази в порядку настання. Дані прихованих фаз не втрачаються.", font=SM, fg="#555").pack(anchor="w", padx=10, pady=(8, 2))
         frm = tk.Frame(self.win); frm.pack(fill=tk.BOTH, expand=True, padx=10)
@@ -162,7 +162,15 @@ class PhaseEditor:
         self.lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True); sb.pack(side=tk.LEFT, fill=tk.Y)
         side = tk.Frame(frm); side.pack(side=tk.LEFT, padx=8, fill=tk.Y)
         for txt, cmd in (("＋ Додати…", self.add), ("✎ Змінити…", self.edit), ("▲ Вище", lambda: self.move(-1)), ("▼ Нижче", lambda: self.move(1)), ("✖ Видалити", self.delete), ("↺ Типові фази культури", self.reset)):
-            tk.Button(side, text=txt, font=RF, anchor="w", command=cmd).pack(fill=tk.X, pady=2)
+            b_ = tk.Button(side, text=txt, font=RF, anchor="w", command=cmd); b_.pack(fill=tk.X, pady=2)
+            if cmd == self.reset: self.reset_btn = b_
+        if not preset_phases:
+            self.reset_btn.configure(state="disabled"); tk.Label(side, text="(у власного набору типових фаз\nнемає – збережіть його як культуру)", font=SM, fg="#666", justify="left").pack(anchor="w")
+        tk.Label(side, text="", font=SM).pack(pady=2)
+        tk.Button(side, text="💾 Зберегти як культуру…", font=RF, anchor="w", bg="#e8f5e9", command=self.save_as_crop).pack(fill=tk.X, pady=2)
+        tk.Label(side, text="(набір з'явиться в переліку культур\nі буде доступний наступного разу)", font=SM, fg="#666", justify="left").pack(anchor="w")
+        if preset_key and P.is_user_preset(preset_key):
+            tk.Button(side, text="🗑 Видалити цю культуру з переліку", font=RF, anchor="w", command=self.delete_crop).pack(fill=tk.X, pady=(8, 2))
         bt = tk.Frame(self.win); bt.pack(fill=tk.X, padx=10, pady=8)
         tk.Button(bt, text="OK", font=RB, bg="#1a6b1a", fg="white", width=10, command=self.ok).pack(side=tk.RIGHT, padx=4)
         tk.Button(bt, text="Скасувати", font=RF, width=10, command=self.win.destroy).pack(side=tk.RIGHT)
@@ -209,7 +217,27 @@ class PhaseEditor:
         if i is not None: del self.phases[i]; self._fill(i)
 
     def reset(self):
+        if not self.preset_phases: return
         self.phases = [dict(p) for p in self.preset_phases]; self._fill(0)
+
+    def save_as_crop(self, name=None):
+        """Поточний набір фаз → культура в переліку (зберігається між запусками)."""
+        if not self.phases: messagebox.showwarning("", "Спочатку додайте фази.", parent=self.win); return None
+        if name is None:
+            cur = P.PRESETS.get(self.preset_key, {}).get("name", "") if self.preset_key and P.is_user_preset(self.preset_key) else ""
+            name = simpledialog.askstring("Зберегти як культуру", "Назва культури (наприклад, «Лохина», «Яблуня – мої фази»):", initialvalue=cur, parent=self.win)
+            if not name: return None
+        try: key = P.save_user_preset(name, self.phases)
+        except (ValueError, OSError) as e: messagebox.showwarning("Зберегти як культуру", str(e), parent=self.win); return None
+        self.preset_key = key; self.preset_phases = P.preset_phases(key)
+        self.win.destroy(); self.on_ok(self.phases)
+        if self.on_saved: self.on_saved(key)
+        return key
+
+    def delete_crop(self):
+        if not messagebox.askyesno("Видалити культуру", f"Видалити «{P.PRESETS[self.preset_key]['name']}» з переліку культур? Дані у ваших таблицях і проєктах не зміняться.", parent=self.win): return
+        P.delete_user_preset(self.preset_key); self.win.destroy()
+        if self.on_saved: self.on_saved(None)
 
     def ok(self):
         if not self.phases: messagebox.showwarning("", "Потрібна хоча б одна фаза.", parent=self.win); return
@@ -245,7 +273,7 @@ class PhenologyWindow:
         dm = tk.Menu(mb, tearoff=0)
         dm.add_command(label="З польового журналу…", command=self.import_journal); dm.add_command(label="З Excel…", command=self.import_excel)
         dm.add_command(label="Вставити з буфера (Ctrl+V у клітинці)", command=self.paste_clipboard)
-        dm.add_separator(); dm.add_command(label="Обходи: % рослин у фазі…", command=self.open_visits)
+        dm.add_separator(); dm.add_command(label="Дата за % рослин у фазі (обходи)…", command=self.open_visits)
         mb.add_cascade(label="Дані", menu=dm)
         sm_ = tk.Menu(mb, tearoff=0)
         sm_.add_command(label="Фази культури…", command=self.edit_phases); sm_.add_command(label="Групи стиглості й їхні стандарти…", command=self.open_groups)
@@ -262,12 +290,20 @@ class PhenologyWindow:
         sep(tb); tk.Label(tb, text="Культура:", font=RB, fg="#1a4b8c").pack(side=tk.LEFT, padx=(0, 4))
         self.preset_var = tk.StringVar(value=P.PRESETS["pome"]["name"])
         cb = ttk.Combobox(tb, textvariable=self.preset_var, values=[P.PRESETS[k]["name"] for k in P.PRESET_ORDER], state="readonly", width=34); cb.pack(side=tk.LEFT, padx=2)
-        cb.bind("<<ComboboxSelected>>", self._on_preset)
+        cb.bind("<<ComboboxSelected>>", self._on_preset); self.preset_cb = cb
         tk.Button(tb, text="✎ Змінити фази…", font=RF, command=self.edit_phases).pack(side=tk.LEFT, padx=3)
         tk.Label(tb, text="  Стандарт:", font=RB, fg="#1a4b8c").pack(side=tk.LEFT); self.std_var = tk.StringVar()
         self.std_cb = ttk.Combobox(tb, textvariable=self.std_var, state="readonly", width=22, postcommand=self._refresh_std); self.std_cb.pack(side=tk.LEFT, padx=3)
         self.std_cb.bind("<<ComboboxSelected>>", lambda e: setattr(self, "standard", "" if self.std_var.get() == "(середнє за сортами)" else self.std_var.get()))
         tk.Button(tb, text="📚 Довідка", bg="#1a4b8c", fg="white", font=RF, command=self._show_help).pack(side=tk.RIGHT, padx=6)
+        # ── ряд 2: решта дій – на видноті, згруповані за призначенням (ті самі, що в меню) ──
+        tbg = tk.Frame(w, padx=6, pady=2, bg="#eef3f8"); tbg.pack(fill=tk.X)
+        def grp(title):
+            tk.Label(tbg, text=title, font=("Times New Roman", 10, "bold"), fg="#1a4b8c", bg="#eef3f8").pack(side=tk.LEFT, padx=(6, 2))
+        def gb(text, cmd): tk.Button(tbg, text=text, font=("Times New Roman", 10), command=cmd).pack(side=tk.LEFT, padx=1)
+        grp("Дані:"); gb("📋 З буфера", self.paste_clipboard); gb("📊 Дата за % рослин (обходи)…", self.open_visits)
+        grp("  Аналіз:"); gb("👥 Групи стиглості…", self.open_groups); gb("🌦 Погода (суми t)…", self.open_weather)
+        grp("  Файл:"); gb("💾 Зберегти", self.save_project); gb("📂 Відкрити", self.open_project); gb("🖨 Бланк для поля", self.blank_form); gb("📤 Дати в Excel", self.export_excel)
         tb2 = tk.Frame(w, padx=6); tb2.pack(fill=tk.X); self._tb2 = tb2
         self.pagebar = tk.Frame(w, padx=6, pady=2, bg="#fff3e0")
         self.pg_lbl = tk.Label(self.pagebar, bg="#fff3e0", font=RF, fg="#8c5a1a")
@@ -536,7 +572,13 @@ class PhenologyWindow:
     def edit_phases(self):
         def ok(phases):
             self._save_current(); self.phases = phases; self._write_grid(self.years_data.get(self.cur_year, [])); self._validate_all()
-        PhaseEditor(self.win, self.phases, P.preset_phases(self.preset_key), ok)
+        return PhaseEditor(self.win, self.phases, P.preset_phases(self.preset_key), ok, self.preset_key, self._on_crop_saved)
+
+    def _on_crop_saved(self, key):
+        """Культуру збережено (key) або видалено (None): оновлюємо перелік і вибір."""
+        self.preset_cb.configure(values=[P.PRESETS[k]["name"] for k in P.PRESET_ORDER])
+        if key: self.preset_key = key; self.preset_var.set(P.PRESETS[key]["name"])
+        else: self.preset_key = "custom"; self.preset_var.set(P.PRESETS["custom"]["name"])
 
     def _refresh_std(self):
         self._save_current(); names = P.cultivar_order([{"name": r["name"]} for rows in self.years_data.values() for r in rows if r["name"]])
@@ -640,6 +682,8 @@ class PhenologyWindow:
         self.years_data = res["years_data"] or {_dt.date.today().year: []}; self.cur_year = max(self.years_data)
         if res.get("standards"): self.standard = res["standards"][0]; self.std_var.set(self.standard)
         if res.get("groups"): self.groups = dict(res["groups"]); self.group_std = dict(res.get("group_std") or {})
+        if res.get("location"):
+            self.weather_coords = (float(res["location"]["lat"]), float(res["location"]["lon"])); self.weather_place = res["location"].get("label", "")
         self._update_groups_label()
         self._write_grid(self.years_data[self.cur_year]); self._update_years(); self._validate_all()
         msg = (f"З журналу перенесено: років {len(res['years_data'])}, сортів {len(res['cultivars'])} (фактор «{res['factor']}»), дат фенофаз {res['n_dates']}. "
@@ -685,7 +729,7 @@ class PhenologyWindow:
         scale = [[p["bbch"] or "–", p["name"], p.get("hint", "")] for p in self.phases]
         items += [{"kind": "heading", "text": "Шкала фаз і критерії настання", "level": 2},
                   {"kind": "table", "headers": ["BBCH", "Фаза", "Критерій настання"], "rows": scale, "fills": [None] * len(scale), "widths": [50, 250, 450]},
-                  {"kind": "text", "text": P.SOURCE, "warn": False}]
+                  ] + ([{"kind": "text", "text": P.SOURCE, "warn": False}] if P.phases_from_monograph(self.phases) else [])
         R.export_docx(path, items, f"Бланк фенологічних спостережень – {self.cur_year}", ""); return path
 
     # ── погода, візити, аналіз ──
@@ -722,7 +766,7 @@ class PhenologyWindow:
     # ── проєкт ──
     def project(self):
         self._save_current()
-        return {"preset": self.preset_key, "phases": self.phases, "years_data": self.years_data, "cur_year": self.cur_year, "standard": self.standard, "thr": self._thr(), "sum_cfg": self.sum_cfg,
+        return {"preset": self.preset_key, "phases": self.phases, "years_data": self.years_data, "cur_year": self.cur_year, "standard": self.standard, "thr": self._thr(), "sum_cfg": self.sum_cfg, "weather_coords": getattr(self, "weather_coords", None), "weather_place": getattr(self, "weather_place", ""),
                 "groups": self.groups, "group_std": self.group_std}
 
     def save_project(self, path=None):
@@ -740,6 +784,7 @@ class PhenologyWindow:
         self.cur_year = d.get("cur_year") if d.get("cur_year") in self.years_data else min(self.years_data); self.standard = d.get("standard", ""); self.std_var.set(self.standard)
         self.thr = float(d.get("thr", 3.0)); self.thr_var.set(str(self.thr).rstrip("0").rstrip(".")); self.sum_cfg = d.get("sum_cfg", self.sum_cfg); self._path = path
         self.groups = dict(d.get("groups") or {}); self.group_std = dict(d.get("group_std") or {}); self._update_groups_label()
+        if d.get("weather_coords"): self.weather_coords = tuple(d["weather_coords"]); self.weather_place = d.get("weather_place", "")
         self.page = 0; self._write_grid(self.years_data[self.cur_year]); self._update_years(); self._validate_all()
 
     def _thr(self):

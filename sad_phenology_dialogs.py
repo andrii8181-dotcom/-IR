@@ -40,7 +40,23 @@ class WeatherDialog:
         self.b_win = tk.Button(f, text="З вікна «Погода»", font=RF, command=self.from_weather_window); self.b_win.grid(row=2, column=0, sticky="we", padx=(0, 4))
         tk.Button(f, text="З файлу Excel / CSV…", font=RF, command=self.from_file).grid(row=2, column=1, sticky="we", padx=4)
         tk.Button(f, text="Вставити з буфера", font=RF, command=self.from_clipboard).grid(row=2, column=2, sticky="we", padx=(4, 0))
-        tk.Label(f, text="Стовпці: дата та середня добова температура (або tmax і tmin). Дані можна отримати у модулі «Погода» (NASA POWER).", font=SM, fg="#666", wraplength=520, justify="left").grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 8))
+        nbox = tk.Frame(f); nbox.grid(row=3, column=0, columnspan=3, sticky="we", pady=(6, 8))
+        nf = tk.Frame(nbox); nf.pack(fill=tk.X)
+        tk.Label(nf, text="З NASA POWER за роки досліду:  широта", font=RF).pack(side=tk.LEFT)
+        lat0, lon0 = (getattr(owner, "weather_coords", None) or (None, None))
+        self.lat = tk.StringVar(value="" if lat0 is None else f"{lat0:g}"); self.lon = tk.StringVar(value="" if lon0 is None else f"{lon0:g}")
+        tk.Entry(nf, textvariable=self.lat, width=8, font=RF).pack(side=tk.LEFT, padx=3); tk.Label(nf, text="довгота", font=RF).pack(side=tk.LEFT)
+        tk.Entry(nf, textvariable=self.lon, width=8, font=RF).pack(side=tk.LEFT, padx=3)
+        self.b_nasa = tk.Button(nf, text="⬇ Отримати з NASA", font=RF, bg="#1a4b8c", fg="white", command=self.from_nasa); self.b_nasa.pack(side=tk.LEFT, padx=6)
+        pf = tk.Frame(nbox); pf.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(pf, text="Місце:", font=RF).pack(side=tk.LEFT)
+        self.place_lbl = tk.Label(pf, text=getattr(owner, "weather_place", "") or "(за координатами)", font=RB, fg="#1a4b8c"); self.place_lbl.pack(side=tk.LEFT, padx=(4, 10))
+        tk.Button(pf, text="🔍 Знайти за назвою…", font=RF, command=self.search_place).pack(side=tk.LEFT, padx=2)
+        import sad_weather as SW
+        SW.SavedPlaces(pf, self.set_place, width=28).pack(side=tk.LEFT, padx=4)
+        self.nasa_msg = tk.Label(nbox, text="Координати – у градусах (наприклад, Умань: 48,75 і 30,22). Або: файл / буфер (стовпці: дата й середня добова температура чи tmax і tmin), "
+                                 "або дані, уже отримані у вікні «Погода».", font=SM, fg="#666", wraplength=560, justify="left")
+        self.nasa_msg.pack(anchor="w", pady=(2, 0))
         tk.Label(f, text="2. Яку суму рахувати", font=RB).grid(row=4, column=0, columnspan=3, sticky="w")
         cfg = owner.sum_cfg; self.kind = tk.StringVar(value="Активних температур (САТ: Σ t при t > порогу)" if cfg["kind"] == "sat" else "Ефективних температур (СЕТ: Σ (t − поріг) при t > порогу)")
         ttk.Combobox(f, textvariable=self.kind, state="readonly", width=58, values=["Активних температур (САТ: Σ t при t > порогу)", "Ефективних температур (СЕТ: Σ (t − поріг) при t > порогу)"]).grid(row=5, column=0, columnspan=3, sticky="w", pady=2)
@@ -59,6 +75,54 @@ class WeatherDialog:
         tk.Button(bt, text="Застосувати", font=RB, bg="#1a6b1a", fg="white", width=14, command=self.apply).pack(side=tk.RIGHT, padx=4)
         tk.Button(bt, text="Прибрати погоду", font=RF, command=self.clear).pack(side=tk.LEFT); tk.Button(bt, text="Закрити", font=RF, command=self.win.destroy).pack(side=tk.RIGHT)
         self._refresh()
+
+    def set_place(self, p):
+        """Місце з пошуку чи переліку раніше обраних → координати для NASA."""
+        self.lat.set(f"{p['lat']:.4f}"); self.lon.set(f"{p['lon']:.4f}"); self.o.weather_place = p.get("label", ""); self.o.weather_coords = (float(p["lat"]), float(p["lon"]))
+        self.place_lbl.configure(text=self.o.weather_place or "(за координатами)")
+
+    def search_place(self):
+        import sad_weather as SW
+        return SW.place_search_dialog(self.win, self.set_place, (getattr(self.o, "weather_place", "") or "").split(",")[0])
+
+    def _years(self):
+        ys = sorted(int(y) for y, rows in self.o.years_data.items() if any(r.get("dates") for r in rows)) or sorted(int(y) for y in self.o.years_data)
+        return ys
+
+    def from_nasa(self):
+        """Добові дані NASA POWER за всі роки досліду (запит у фоні; вікно не «зависає»)."""
+        import threading, queue, datetime as _d
+        import sad_weather_core as W
+        try:
+            lat = float(self.lat.get().replace(",", ".")); lon = float(self.lon.get().replace(",", "."))
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180): raise ValueError
+        except ValueError:
+            messagebox.showwarning("NASA POWER", "Вкажіть широту (−90…90) і довготу (−180…180) у градусах, наприклад 48,75 і 30,22.", parent=self.win); return
+        ys = self._years()
+        if not ys: messagebox.showwarning("NASA POWER", "У таблиці ще немає років із датами.", parent=self.win); return
+        d0 = _d.date(ys[0], 1, 1); d1 = min(_d.date(ys[-1], 12, 31), _d.date.today() - _d.timedelta(days=2))
+        self.o.weather_coords = (lat, lon); q = queue.Queue(); self.b_nasa.configure(state="disabled")
+        self.nasa_msg.configure(text=f"Завантаження NASA POWER за {ys[0]}–{ys[-1]}…", fg="#1a4b8c")
+        def work():
+            try: q.put(("done", W.fetch_nasa(lat, lon, d0, d1, progress=lambda m: q.put(("prog", m)))))
+            except Exception as e: q.put(("err", str(e)))
+        threading.Thread(target=work, daemon=True).start(); self._nasa_q = q
+        def poll():
+            try:
+                while True:
+                    kind, val = q.get_nowait()
+                    if kind == "prog": self.nasa_msg.configure(text=val)
+                    elif kind == "err":
+                        self.b_nasa.configure(state="normal"); self.nasa_msg.configure(text=f"Не вдалося отримати дані: {val}", fg="#c62828"); return
+                    else:
+                        self.b_nasa.configure(state="normal")
+                        if len(val) == 0: self.nasa_msg.configure(text="NASA POWER не повернув даних за цей період.", fg="#c62828"); return
+                        place = getattr(self.o, "weather_place", "") or ""
+                        self._set(val, f"NASA POWER – {place + ' ' if place else ''}({lat:g}; {lon:g})"); self.nasa_msg.configure(text=f"Отримано {len(val)} діб ({d0:%d.%m.%Y} – {val.dates[-1]:%d.%m.%Y}).", fg="#1a6b1a")
+                        import sad_weather_core as _W; _W.remember_place(place, lat, lon); return
+            except queue.Empty: pass
+            if self.win.winfo_exists(): self.win.after(150, poll)
+        self.win.after(150, poll)
 
     def _refresh(self):
         try:
@@ -109,19 +173,26 @@ class WeatherDialog:
 # ═══════════════════════════════════════════════════════════════
 # Облік за візитами
 # ═══════════════════════════════════════════════════════════════
+VISITS_HELP = ("Навіщо: фаза настає в рослин не одночасно. Замість шукати точну дату на кожному обході записуєте, яка частка рослин ділянки вже у фазі, – "
+               "програма сама визначить дату.\n"
+               "Як: 1) «＋ Обхід» – дата обходу (з'явиться стовпчик);  2) у ньому для кожного рядка – % рослин, що вже у фазі (0–100);  "
+               "3) нижче оберіть фазу й поріг (наприклад, початок цвітіння – 10 %, повне – 50 %);  4) «Обчислити й записати».\n"
+               "Приклад: 2 травня – 5 %, 6 травня – 45 %  →  10 % досягнуто між обходами, ≈ 3 травня. Обходи можна додавати протягом кількох днів.")
+
+
 class VisitsDialog:
     """Візити: відсоток рослин у фазі → дата настання за порогом (лінійна інтерполяція) → у таблицю."""
     def __init__(self, parent, owner):
         self.o = owner; owner._save_current(); self.model = owner.years_data.setdefault(owner.cur_year, []); self.rows = [(i, r) for i, r in enumerate(self.model) if r["name"].strip()]
         self.dates = []; self.cells = []; self.results = []
-        self.win = tk.Toplevel(parent); self.win.title("Облік за візитами"); self.win.geometry("980x560"); self.win.transient(parent); set_icon(self.win)
-        tk.Label(self.win, text="Для кожного візиту вкажіть, який відсоток рослин (пагонів, бруньок, суцвіть) був у фазі. Програма знайде дату, коли досягнуто поріг, і запише її в таблицю.", font=SM, fg="#555", wraplength=940, justify="left").pack(anchor="w", padx=10, pady=(8, 2))
-        top = tk.Frame(self.win); top.pack(fill=tk.X, padx=10); tk.Button(top, text="＋ Візит (дата)…", font=RF, command=self.add_visit).pack(side=tk.LEFT); tk.Button(top, text="✖ Прибрати останній візит", font=RF, command=self.del_visit).pack(side=tk.LEFT, padx=6)
+        self.win = tk.Toplevel(parent); self.win.title("Дата фази за % рослин у фазі (обходи)"); self.win.geometry("1000x640"); self.win.transient(parent); set_icon(self.win)
+        tk.Label(self.win, text=VISITS_HELP, font=SM, fg="#333", bg="#f4f8fc", wraplength=950, justify="left", padx=8, pady=6, relief=tk.GROOVE, bd=1).pack(fill=tk.X, padx=10, pady=(8, 4))
+        top = tk.Frame(self.win); top.pack(fill=tk.X, padx=10); tk.Button(top, text="＋ Обхід (дата)…", font=RF, command=self.add_visit).pack(side=tk.LEFT); tk.Button(top, text="✖ Прибрати останній обхід", font=RF, command=self.del_visit).pack(side=tk.LEFT, padx=6)
         body = tk.Frame(self.win); body.pack(fill=tk.BOTH, expand=True, padx=10, pady=6); self.cv = tk.Canvas(body, highlightthickness=0, height=240)
         hs = ttk.Scrollbar(body, orient="horizontal", command=self.cv.xview); vs = ttk.Scrollbar(body, orient="vertical", command=self.cv.yview); self.cv.configure(xscrollcommand=hs.set, yscrollcommand=vs.set)
         vs.pack(side=tk.RIGHT, fill=tk.Y); hs.pack(side=tk.BOTTOM, fill=tk.X); self.cv.pack(fill=tk.BOTH, expand=True); self.gf = tk.Frame(self.cv); self.cv.create_window((0, 0), window=self.gf, anchor="nw")
         self.gf.bind("<Configure>", lambda e: self.cv.configure(scrollregion=self.cv.bbox("all")))
-        tg = tk.LabelFrame(self.win, text=" Записати в таблицю ", font=RB, padx=8, pady=6); tg.pack(fill=tk.X, padx=10, pady=4)
+        tg = tk.LabelFrame(self.win, text=" Яку дату записати в таблицю: фаза – і при якому % рослин вона вважається такою, що настала ", font=RB, padx=8, pady=6); tg.pack(fill=tk.X, padx=10, pady=4)
         self.phase_labels = {P.phase_label(p): p["key"] for p in owner.phases}; names = list(self.phase_labels); self.targets = []
         defaults = [("bloom0", 10), ("bloom50", 50), ("bloom1", 90)]; keys = {p["key"]: P.phase_label(p) for p in owner.phases}
         for i in range(3):
@@ -138,7 +209,7 @@ class VisitsDialog:
         keep = keep if keep is not None else [[e.get() for e in row] for row in self.cells]
         for w in self.gf.winfo_children(): w.destroy()
         self.cells = []; tk.Label(self.gf, text="Сорт", font=RB, bg="#1a4b8c", fg="white", width=24).grid(row=0, column=0, padx=1); tk.Label(self.gf, text="Повт.", font=RB, bg="#1a4b8c", fg="white", width=5).grid(row=0, column=1, padx=1)
-        for j, d in enumerate(self.dates): tk.Label(self.gf, text=d.strftime("%d.%m"), font=RB, bg="#1a4b8c", fg="white", width=8).grid(row=0, column=2 + j, padx=1)
+        for j, d in enumerate(self.dates): tk.Label(self.gf, text=d.strftime("%d.%m") + "\n% у фазі", font=("Times New Roman", 10, "bold"), bg="#1a4b8c", fg="white", width=9).grid(row=0, column=2 + j, padx=1)
         for i, (gi, r) in enumerate(self.rows):
             tk.Label(self.gf, text=r["name"], font=RF, anchor="w", width=24).grid(row=i + 1, column=0); tk.Label(self.gf, text=r["rep"], font=RF, width=5).grid(row=i + 1, column=1); row = []
             for j in range(len(self.dates)):
@@ -149,7 +220,7 @@ class VisitsDialog:
 
     def add_visit(self, date=None):
         if date is None:
-            txt = simpledialog.askstring("Візит", "Дата візиту (наприклад, 05.05):", parent=self.win)
+            txt = simpledialog.askstring("Обхід", "Дата обходу (наприклад, 05.05):", parent=self.win)
             if not txt: return
             date, msg = P.parse_date_flex(txt, self.o.cur_year)
             if date is None: messagebox.showwarning("", msg or "Не схоже на дату.", parent=self.win); return

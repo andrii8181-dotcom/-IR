@@ -187,6 +187,12 @@ def embed_figure(fig, master, dpi=96):
     widget._sad_fig = fig                      # щоб експорт звіту (sad_report) знайшов графік у вікні
     widget.pack(fill=tk.BOTH, expand=True)
     cv.draw()
+    def _fit(_e=None):                         # на екранах із масштабом ≠ 100 % перший малюнок більший за вікно – підганяємо під фактичний розмір
+        try:
+            if widget.winfo_exists() and widget.winfo_width() > 1:
+                widget.event_generate("<Configure>", width=widget.winfo_width(), height=widget.winfo_height())
+        except tk.TclError: pass
+    widget.after(30, _fit); widget.bind("<Map>", lambda e: widget.after(10, _fit), add="+")
     return cv
 
 

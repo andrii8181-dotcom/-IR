@@ -16,6 +16,9 @@ CLASS_BG = {"ранній": "#c8e6c9", "середній": "#ffffff", "пізн�
 CHARTS = ["Фенологічний спектр (середні дати й тривалість періодів)", "Дати за сортами (розподіл за роками й повторностями)", "Відхилення від стандарту (діб)", "Динаміка за роками",
           "Розподіл середніх дат сортів (гістограма)", "Ранжований профіль середніх дат",
           "Фази на тлі температури (погода)", "Суми температур до фази за сортами (погода)"]
+C_MAIN, C_EARLY, C_LATE, C_MID = "#4c72b0", "#2e7d32", "#e65100", "#78909c"     # стовпчики; ранній; пізній (і стандарт); середній – змінюються в «⚙ Налаштування»
+GS_DEFAULT = {"font": "Times New Roman", "scale": 100, "main": C_MAIN, "early": C_EARLY, "late": C_LATE, "mid": C_MID}
+PHASE_FREE = {0, 6}                 # графіки, що не залежать від вибраної фази (спектр, фази на тлі температури)
 MAX_SHOWN = 30                    # більше сортів на графіках не показуємо: стандарт + найранішi й найпізніші за вибраною фазою
 
 
@@ -277,8 +280,11 @@ class PhenologyResults:
         tk.Label(bar, text="  Фаза:", font=RF).pack(side=tk.LEFT); self.cphase_var = tk.StringVar(value=P.phase_label(c["phases"][min(len(c["phases"]) - 1, 3 if len(c["phases"]) > 3 else 0)]))
         self._cp_labels = {P.phase_label(p): p["key"] for p in c["phases"]}; cb2 = ttk.Combobox(bar, textvariable=self.cphase_var, values=list(self._cp_labels), state="readonly", width=42); cb2.pack(side=tk.LEFT, padx=4)
         tk.Button(bar, text="💾 PNG…", font=RF, command=self._save_png).pack(side=tk.LEFT, padx=8)
+        tk.Button(bar, text="⚙ Налаштування", font=RF, bg="#1a4b8c", fg="white", command=self._settings).pack(side=tk.LEFT, padx=2)
         for w in (cb, cb2): w.bind("<<ComboboxSelected>>", lambda e: self._draw())
-        self.chart_holder = tk.Frame(f); self.chart_holder.pack(fill=tk.BOTH, expand=True, pady=4); self._draw()
+        self.chart_holder = tk.Frame(f); self.chart_holder.pack(fill=tk.BOTH, expand=True, pady=4)
+        self.chart_holder._sad_figs_provider = self._all_figures            # Word / Excel: усі графіки, а не лише показаний
+        self._draw()
 
     def _subset(self, k):
         """Сорти для графіка: усі, якщо їх не більше MAX_SHOWN; інакше стандарт + найраніші й найпізніші за фазою k. → (сорти в порядку, примітка)."""
@@ -288,11 +294,62 @@ class PhenologyResults:
         pick = set(srt[:half]) | set(srt[-half:]) | set(st_)
         return [cv for cv in c["cultivars"] if cv in pick], f"показано {len(pick)} із {len(have)} сортів: найраніші, найпізніші й стандарт"
 
+    def _make(self, kind, k):
+        """Графік kind для фази k з урахуванням налаштувань (шрифт, розмір тексту, кольори)."""
+        global FONT, C_MAIN, C_EARLY, C_LATE, C_MID
+        gs = getattr(self, "gs", GS_DEFAULT)
+        FONT = [gs["font"], "DejaVu Serif"]; C_MAIN, C_EARLY, C_LATE, C_MID = gs["main"], gs["early"], gs["late"], gs["mid"]
+        fig = [self.fig_spectrum, self.fig_box, self.fig_dev, self.fig_dyn, self.fig_hist, self.fig_rank, self.fig_temp, self.fig_sums][kind](k)
+        if gs["scale"] != 100:
+            from matplotlib.text import Text
+            for t in fig.findobj(Text): t.set_fontsize(t.get_fontsize() * gs["scale"] / 100.0)
+            try: fig.tight_layout()
+            except Exception: pass
+        return fig
+
     def _draw(self):
         for w in self.chart_holder.winfo_children(): w.destroy()
         kind = CHARTS.index(self.chart_var.get()); k = self._cp_labels[self.cphase_var.get()]
-        fig = [self.fig_spectrum, self.fig_box, self.fig_dev, self.fig_dyn, self.fig_hist, self.fig_rank, self.fig_temp, self.fig_sums][kind](k)
+        fig = self._make(kind, k)
         self.fig = fig; embed_figure(fig, self.chart_holder)
+
+    def _all_figures(self):
+        """Усі графіки для звіту: незалежні від фази – по одному, решта – для кожної фази з даними. Порожні (немає погоди тощо) пропускаються."""
+        c = self.ctx; out = []
+        phs = [p for p in c["phases"] if any(c["summ"][(cv, p["key"])]["n"] > 0 for cv in c["cultivars"])] or c["phases"][:1]
+        for kind, name in enumerate(CHARTS):
+            for p in (phs[:1] if kind in PHASE_FREE else phs):
+                fig = self._make(kind, p["key"])
+                if getattr(fig, "_sad_empty", False): break
+                out.append((name.replace(" (погода)", "") + ("" if kind in PHASE_FREE else f": {p['name']}"), fig))
+        return out
+
+    def _settings(self):
+        """Налаштування графіків: шрифт, розмір тексту, кольори (діють на всі графіки вікна й на експорт)."""
+        from tkinter import colorchooser
+        gs = dict(getattr(self, "gs", GS_DEFAULT)); d = tk.Toplevel(self.win); d.title("Налаштування графіків"); d.transient(self.win); d.resizable(False, False); set_icon(d)
+        f = tk.Frame(d, padx=14, pady=10); f.pack()
+        tk.Label(f, text="Шрифт:", font=RF).grid(row=0, column=0, sticky="w", pady=3); fv = tk.StringVar(value=gs["font"])
+        ttk.Combobox(f, textvariable=fv, values=["Times New Roman", "Arial", "Calibri", "Georgia", "Verdana", "DejaVu Serif", "DejaVu Sans"], width=24).grid(row=0, column=1, sticky="w", padx=6)
+        tk.Label(f, text="Розмір тексту, %:", font=RF).grid(row=1, column=0, sticky="w", pady=3); sv = tk.StringVar(value=str(gs["scale"]))
+        tk.Spinbox(f, from_=60, to=200, increment=10, textvariable=sv, width=6, font=RF).grid(row=1, column=1, sticky="w", padx=6)
+        btns = {}
+        def pick(key):
+            col = colorchooser.askcolor(color=gs[key], parent=d)[1]
+            if col: gs[key] = col; btns[key].configure(bg=col)
+        for r, (key, lab) in enumerate((("main", "Стовпчики й точки:"), ("early", "Ранні сорти:"), ("late", "Пізні сорти й стандарт:"), ("mid", "Середні сорти:")), start=2):
+            tk.Label(f, text=lab, font=RF).grid(row=r, column=0, sticky="w", pady=3)
+            btns[key] = tk.Button(f, text="      ", bg=gs[key], command=lambda k_=key: pick(k_)); btns[key].grid(row=r, column=1, sticky="w", padx=6)
+        def apply():
+            try: sc = max(60, min(200, int(float(sv.get()))))
+            except ValueError: sc = 100
+            gs.update(font=fv.get().strip() or "Times New Roman", scale=sc); self.gs = gs; self._draw()
+        def reset():
+            self.gs = dict(GS_DEFAULT); d.destroy(); self._draw()
+        bt = tk.Frame(f); bt.grid(row=7, column=0, columnspan=2, pady=(10, 0))
+        tk.Button(bt, text="Застосувати", font=RB, bg="#1a6b1a", fg="white", command=apply).pack(side=tk.LEFT, padx=3)
+        tk.Button(bt, text="Типові", font=RF, command=reset).pack(side=tk.LEFT, padx=3); tk.Button(bt, text="Закрити", font=RF, command=d.destroy).pack(side=tk.LEFT, padx=3)
+        self._settings_win = d; return d
 
     def _save_png(self):
         if self.fig is None: return
@@ -300,7 +357,8 @@ class PhenologyResults:
         if p: self.fig.savefig(p, dpi=250, bbox_inches="tight", facecolor="white")
 
     def _empty(self, text):
-        fig = Figure(figsize=(8, 3), dpi=100); ax = fig.add_subplot(111); ax.axis("off"); ax.text(0.5, 0.5, text, ha="center", va="center", fontfamily=FONT, fontsize=12, color="#8c5a1a", wrap=True); return fig
+        fig = Figure(figsize=(8, 3), dpi=100); ax = fig.add_subplot(111); ax.axis("off"); ax.text(0.5, 0.5, text, ha="center", va="center", fontfamily=FONT, fontsize=12, color="#8c5a1a", wrap=True)
+        fig._sad_empty = True; return fig
 
     def fig_temp(self, k):
         """Середня добова температура за сезон (згладжена, кожен рік – окрема лінія) і смуги фаз: від найранішого до найпізнішого сорту."""
@@ -342,7 +400,7 @@ class PhenologyResults:
         if not vals: return self._empty("Для цієї фази немає сум температур (погода не покриває періоди).")
         vals.sort(key=lambda x: x[1]["mean"]); fig = Figure(figsize=(9.5, max(3.2, 0.36 * len(vals) + 1.8)), dpi=100); ax = fig.add_subplot(111)
         ys = range(len(vals)); m = [v["mean"] for _, v in vals]; sd = [0 if (v["n"] < 2 or v["sd"] != v["sd"]) else v["sd"] for _, v in vals]
-        ax.barh(list(ys), m, xerr=sd, color=["#e65100" if cv in self._stds else "#4c72b0" for cv, _ in vals], height=0.62, capsize=2, error_kw={"elinewidth": 0.9})
+        ax.barh(list(ys), m, xerr=sd, color=[C_LATE if cv in self._stds else C_MAIN for cv, _ in vals], height=0.62, capsize=2, error_kw={"elinewidth": 0.9})
         ax.set_yticks(list(ys)); ax.set_yticklabels([cv for cv, _ in vals], fontfamily=FONT, fontsize=9.5); ax.grid(axis="x", alpha=0.3); ax.set_axisbelow(True)
         cfg = c["sum_cfg"]; kind = "активних (САТ)" if cfg["kind"] == "sat" else "ефективних (СЕТ)"
         start = f"з {int(cfg['start'][2]):02d}.{int(cfg['start'][1]):02d}" if cfg["start"][0] == "md" else "від дати фази «" + next((p["name"] for p in c["all_phases"] if p["key"] == cfg["start"][1]), cfg["start"][1]) + "»"
@@ -388,13 +446,13 @@ class PhenologyResults:
         if not cvs: return self._empty("Для цієї фази немає дат.")
         order = sorted(cvs, key=lambda cv: c["vs"][(cv, k)][0]); vals = [c["vs"][(cv, k)][0] for cv in order]
         fig = Figure(figsize=(8.5, max(3.2, 0.42 * len(order) + 1.8)), dpi=100); ax = fig.add_subplot(111)
-        cols = [{"ранній": "#2e7d32", "пізній": "#e65100"}.get(c["vs"][(cv, k)][1], "#78909c") for cv in order]
+        cols = [{"ранній": C_EARLY, "пізній": C_LATE}.get(c["vs"][(cv, k)][1], C_MID) for cv in order]
         ax.barh(range(len(order)), vals, color=cols, height=0.62); ax.axvline(0, color="#222222", linewidth=1)
         for i, v in enumerate(vals): ax.text(v + (0.15 if v >= 0 else -0.15), i, _f(v, 1, True), va="center", ha="left" if v >= 0 else "right", fontfamily=FONT, fontsize=9)
         ax.set_yticks(range(len(order))); ax.set_yticklabels(order, fontfamily=FONT, fontsize=10); ax.grid(axis="x", alpha=0.3); ax.set_axisbelow(True)
         lim = max(1.0, max(abs(v) for v in vals)) * 1.25; ax.set_xlim(-lim, lim); ref = ("стандарту своєї групи" if self._gstd else (f"стандарту «{c['standard']}»" if c["standard"] else "середнього за сортами"))
         ax.set_xlabel(f"Різниця від {ref}, діб (− раніше, + пізніше)", fontfamily=FONT, fontsize=10); pname = next(p["name"] for p in c["phases"] if p["key"] == k)
-        ax.set_title(pname + (f"\n({note})" if note else ""), fontfamily=FONT, fontsize=13 if not note else 11); ax.legend(handles=[Patch(color="#2e7d32", label="ранній"), Patch(color="#78909c", label="середній"), Patch(color="#e65100", label="пізній")], loc="lower right", prop={"family": FONT, "size": 9}, frameon=False)
+        ax.set_title(pname + (f"\n({note})" if note else ""), fontfamily=FONT, fontsize=13 if not note else 11); ax.legend(handles=[Patch(color=C_EARLY, label="ранній"), Patch(color=C_MID, label="середній"), Patch(color=C_LATE, label="пізній")], loc="lower right", prop={"family": FONT, "size": 9}, frameon=False)
         fig.tight_layout(); return fig
 
     def fig_dyn(self, k):
@@ -424,7 +482,7 @@ class PhenologyResults:
                 x = c["summ"].get((s_, k), {"n": 0})
                 if x["n"]: ax.axvline(x["mean"], color=PALETTE[i_ % len(PALETTE)], lw=1.6, label=f"стандарт «{s_}» ({g}): {P.md_from_doy(x['mean'])}")
         else:
-            for x, col, lab in ((ref, "#222222", "стандарт" if c["standard"] else "середнє за сортами"), (ref - thr, "#2e7d32", "межа «ранній»"), (ref + thr, "#e65100", "межа «пізній»")):
+            for x, col, lab in ((ref, "#222222", "стандарт" if c["standard"] else "середнє за сортами"), (ref - thr, C_EARLY, "межа «ранній»"), (ref + thr, C_LATE, "межа «пізній»")):
                 if not math.isnan(x): ax.axvline(x, color=col, lw=1.4, ls="-" if col == "#222222" else "--", label=f"{lab} ({P.md_from_doy(x)})")
         ne = sum(1 for cv in have if c["vs"][(cv, k)][1] == "ранній"); nl = sum(1 for cv in have if c["vs"][(cv, k)][1] == "пізній")
         _dow_axis(ax, v.min() - 1, v.max() + 1); ax.set_xlabel("Середня дата настання фази", fontfamily=FONT, fontsize=11); ax.set_ylabel("Кількість сортів", fontfamily=FONT, fontsize=11); ax.grid(axis="y", alpha=0.3)
@@ -436,7 +494,7 @@ class PhenologyResults:
         c = self.ctx; have = sorted([cv for cv in c["cultivars"] if c["summ"][(cv, k)]["n"] > 0], key=lambda cv: c["summ"][(cv, k)]["mean"])
         if len(have) < 2: return self._empty("Для профілю потрібно щонайменше два сорти з датами цієї фази.")
         m = np.array([c["summ"][(cv, k)]["mean"] for cv in have]); sd = np.array([0.0 if math.isnan(c["summ"][(cv, k)]["sd"]) else c["summ"][(cv, k)]["sd"] for cv in have]); x = np.arange(1, len(have) + 1)
-        col = [{"ранній": "#2e7d32", "пізній": "#e65100"}.get(c["vs"][(cv, k)][1], "#78909c") for cv in have]
+        col = [{"ранній": C_EARLY, "пізній": C_LATE}.get(c["vs"][(cv, k)][1], C_MID) for cv in have]
         fig = Figure(figsize=(10.5, 5.4), dpi=100); ax = fig.add_subplot(111); ax.fill_between(x, m - sd, m + sd, color="#cfd8dc", alpha=0.7, lw=0, label="± SD")
         ax.scatter(x, m, c=col, s=max(8, 90 - len(have) * 0.3), zorder=3, edgecolor="white", linewidth=0.3)
         for st_ in sorted(self._stds):
@@ -444,5 +502,5 @@ class PhenologyResults:
         if len(have) <= 40: ax.set_xticks(x); ax.set_xticklabels(have, rotation=70, ha="right", fontfamily=FONT, fontsize=8)
         else: ax.set_xlabel(f"Сорти від найранішого до найпізнішого (всього {len(have)})", fontfamily=FONT, fontsize=11)
         _dow_axis(ax, float((m - sd).min()) - 1, float((m + sd).max()) + 1, "y"); ax.grid(alpha=0.3); pname = next(p["name"] for p in c["phases"] if p["key"] == k)
-        ax.set_title(f"{pname}: ранжований профіль середніх дат", fontfamily=FONT, fontsize=13); ax.legend(handles=[Patch(color="#2e7d32", label="ранній"), Patch(color="#78909c", label="середній"), Patch(color="#e65100", label="пізній")] + ax.get_legend_handles_labels()[0][:0],
+        ax.set_title(f"{pname}: ранжований профіль середніх дат", fontfamily=FONT, fontsize=13); ax.legend(handles=[Patch(color=C_EARLY, label="ранній"), Patch(color=C_MID, label="середній"), Patch(color=C_LATE, label="пізній")] + ax.get_legend_handles_labels()[0][:0],
                                                                                                       prop={"family": FONT, "size": 9}, frameon=False, loc="upper left"); fig.tight_layout(); return fig

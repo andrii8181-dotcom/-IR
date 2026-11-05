@@ -199,6 +199,68 @@ PRESETS = {
 PRESET_ORDER = ["pome", "stone", "vine", "currants", "strawberry", "cereal", "maize", "sunflower", "soy", "rape", "pea", "potato", "tomato", "universal", "custom"]
 
 
+# ── Власні культури (набори фаз) користувача: зберігаються між запусками в %APPDATA%/SAD/phenology_crops.json ──
+BUILTIN_PRESETS = [k for k in PRESET_ORDER if k != "custom"]
+
+
+def user_presets_path():
+    import os
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "SAD", "phenology_crops.json")
+
+
+def is_user_preset(key): return str(key).startswith("user:")
+
+
+def _register_user(items):
+    for k in [k for k in PRESET_ORDER if is_user_preset(k)]: PRESET_ORDER.remove(k); PRESETS.pop(k, None)
+    pos = PRESET_ORDER.index("custom")
+    for it in items:
+        key = "user:" + it["name"]; PRESETS[key] = {"name": it["name"], "phases": [dict(x) for x in it["phases"]], "user": True}
+        PRESET_ORDER.insert(pos, key); pos += 1
+
+
+def load_user_presets(path=None):
+    """Зчитує збережені власні культури й додає їх до переліку (перед «Власним набором»). Помилки читання ігноруються."""
+    import json, os
+    try:
+        with open(path or user_presets_path(), "r", encoding="utf-8") as f: d = json.load(f)
+        items = [it for it in d.get("crops", []) if it.get("name") and isinstance(it.get("phases"), list)]
+    except Exception:
+        items = []
+    _register_user(items); return [("user:" + it["name"]) for it in items]
+
+
+def _write_user(path=None):
+    import json, os
+    path = path or user_presets_path(); os.makedirs(os.path.dirname(path), exist_ok=True)
+    crops = [{"name": PRESETS[k]["name"], "phases": PRESETS[k]["phases"]} for k in PRESET_ORDER if is_user_preset(k)]
+    with open(path, "w", encoding="utf-8") as f: json.dump({"crops": crops}, f, ensure_ascii=False, indent=1)
+
+
+def save_user_preset(name, phases, path=None):
+    """Зберігає набір фаз як культуру (з тією ж назвою – перезаписує). → ключ. ValueError – порожня назва чи назва вбудованої культури."""
+    name = (name or "").strip()
+    if not name: raise ValueError("Вкажіть назву культури.")
+    if any(PRESETS[k]["name"].lower() == name.lower() for k in BUILTIN_PRESETS + ["custom"]): raise ValueError(f"Культура «{name}» уже є серед вбудованих – оберіть іншу назву.")
+    if not phases: raise ValueError("У наборі немає жодної фази.")
+    items = [{"name": PRESETS[k]["name"], "phases": PRESETS[k]["phases"]} for k in PRESET_ORDER if is_user_preset(k) and PRESETS[k]["name"] != name]
+    items.append({"name": name, "phases": [{"key": p["key"], "name": p["name"], "bbch": p.get("bbch", ""), "hint": p.get("hint", "")} for p in phases]})
+    _register_user(items); _write_user(path); return "user:" + name
+
+
+def delete_user_preset(key, path=None):
+    if not is_user_preset(key) or key not in PRESETS: return False
+    items = [{"name": PRESETS[k]["name"], "phases": PRESETS[k]["phases"]} for k in PRESET_ORDER if is_user_preset(k) and k != key]
+    _register_user(items); _write_user(path); return True
+
+
+def phases_from_monograph(phases):
+    """Чи всі фази взято з вбудованих наборів без змін (тоді доречне посилання на монографію BBCH)."""
+    ref = {(p["name"], p.get("bbch", ""), p.get("hint", "")) for k in BUILTIN_PRESETS for p in PRESETS[k]["phases"]}
+    return bool(phases) and all((p["name"], p.get("bbch", ""), p.get("hint", "")) in ref for p in phases)
+
+
 def preset_phases(key):
     return [dict(p) for p in PRESETS[key]["phases"]]
 
@@ -709,3 +771,6 @@ def analyze(years_data, phases, standard="", thr=3.0, series=None, sum_cfg=None,
             "vs": vs, "ref": ref, "standard": std, "thr": thr, "groups": grp, "group_std": gstd, "ref_of": ref_of,
             "standards": sorted(({std} if std else set()) | set(gstd.values())), "anova": anovas, "compare": compare, "method": method, "sums": sums, "sum_cfg": sum_cfg if sums is not None else None, "nan_sums": nan_sums, "series": series,
             "years": sorted({r["year"] for r in recs}), "n_obs": len(recs)}
+
+
+load_user_presets()

@@ -102,6 +102,11 @@ def collect(root, title=None, roots=None):
         cls = w.winfo_class()
         if getattr(w, "_sad_noexport", False) or cls in SKIP_CLASSES: return
         if isinstance(w, tk.Toplevel) and w is not root: return
+        prov = getattr(w, "_sad_figs_provider", None)              # вікно саме віддає всі свої графіки (не лише показаний зараз)
+        if callable(prov):
+            for cap, f_ in prov():
+                f_._sad_caption = cap; seen_fig.add(id(f_)); items.append({"kind": "figure", "fig": f_})
+            return
         fig = getattr(w, "_sad_fig", None)
         if fig is not None:
             if id(fig) not in seen_fig: seen_fig.add(id(fig)); items.append({"kind": "figure", "fig": fig})
@@ -235,6 +240,7 @@ def figure_png(fig, dpi=200):
 
 
 def figure_caption(fig):
+    if getattr(fig, "_sad_caption", None): return str(fig._sad_caption)
     try:
         st = getattr(fig, "_suptitle", None)
         if st is not None and st.get_text().strip(): return st.get_text().strip().replace("\n", " ")
