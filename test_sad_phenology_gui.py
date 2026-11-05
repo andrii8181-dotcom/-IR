@@ -39,13 +39,27 @@ btns = [b for b in all_w(w.win) if b.winfo_class() == "Button" and b.winfo_ismap
 tbs = [c for c in w.win.winfo_children() if c.winfo_class() == "Frame"][:1]
 vb = [b for f_ in tbs for b in all_w(f_) if b.winfo_class() == "Button"]
 check(all(b.winfo_ismapped() and b.winfo_rootx() + b.winfo_width() <= w.win.winfo_rootx() + w.win.winfo_width() + 2 for b in vb), f"усі кнопки панелі ({len(vb)}) вміщуються у вікні шириною 1260 px")
-txts = [b.cget("text") for b in vb]; check(txts == ["▶ Аналіз", "📂 З польового журналу…", "📥 Excel…", "📚 Довідка"], f"на видноті лише головне: аналіз, журнал, Excel, довідка: {txts}")
+txts = [b.cget("text") for b in vb]; check(txts == ["▶ Аналіз", "📂 З польового журналу…", "📥 Excel…", "✎ Змінити фази…", "📚 Довідка"], f"на панелі: аналіз, журнал, Excel, зміна фаз, довідка: {txts}")
+opened = []; _orig_pe = PW.PhaseEditor; PW.PhaseEditor = lambda *a, **k: opened.append(a)
+w.preset_var.set(P.PRESETS["custom"]["name"]); w._on_preset(); root.update()
+check(len(opened) == 1 and len(w.entries[0]) == 2, "«Власний набір (порожній)»: таблиця без фаз і одразу відкривається редактор фаз")
+opened.clear(); w.preset_var.set(P.PRESETS["vine"]["name"]); w._on_preset(); root.update(); check(not opened, "для культури з типовими фазами редактор сам не відкривається")
+[b for b in vb if "Змінити фази" in b.cget("text")][0].invoke(); root.update(); check(len(opened) == 1, "кнопка «✎ Змінити фази…» відкриває редактор для будь-якої культури")
+PW.PhaseEditor = _orig_pe; w.preset_var.set(P.PRESETS["pome"]["name"]); w._on_preset(); root.update()
+ed = PW.PhaseEditor(w.win, w.phases, P.preset_phases("pome"), lambda ph: None)
+ed.lb.selection_set(2); ed.delete(); ed.lb.selection_clear(0, tk.END); ed.lb.selection_set(0); ed._ask = lambda p=None: {"name": "Набрякання бруньок (моя назва)", "bbch": "01", "hint": ""}; ed.edit()
+ed.lb.selection_clear(0, tk.END); ed._ask = lambda p=None: {"name": "Моя фаза", "bbch": "", "hint": ""}; ed.add()
+res_ph = []; ed.on_ok = lambda ph: (res_ph.extend(ph), w._save_current(), setattr(w, "phases", ph), w._write_grid(w.years_data.get(w.cur_year, [])), w._validate_all()); ed.ok(); root.update()
+hd_ = [h.cget("text") for h in w.hdr]
+check(len(w.entries[0]) == 2 + 15 and "«Мишаче вушко» (10)" not in hd_ and hd_[2] == "Набрякання бруньок (моя назва) (01)" and hd_[-1] == "Моя фаза", f"яблуня: фазу видалено, іншу перейменовано, власну додано в кінець – таблиця перебудована ({len(w.entries[0]) - 2} фаз)")
+ed2 = PW.PhaseEditor(w.win, [], [], lambda ph: None); ed2._ask = lambda p=None: {"name": "Сходи", "bbch": "09", "hint": ""}; ed2.add(); check(len(ed2.phases) == 1 and ed2.lb.size() == 1, "у порожньому наборі «＋ Додати…» працює без виділення"); ed2.win.destroy()
+w.preset_var.set(P.PRESETS["pome"]["name"]); w._on_preset(); root.update()
 check(len([c for c in all_w(tbs[0]) if c.winfo_class() == "TCombobox"]) == 2, "на панелі – вибір культури й стандарту")
 mbar = w.win.nametowidget(w.win.cget("menu"))
 def _ml(m_): return [m_.entrycget(i_, "label") for i_ in range(m_.index("end") + 1) if m_.type(i_) not in ("tearoff", "separator")]
 tops = _ml(mbar); check(tops == ["Файл", "Дані", "Налаштування"], f"меню: {tops}")
 sub = {tops[i_]: _ml(mbar.nametowidget(mbar.entrycget(i_ + (1 if mbar.type(0) == "tearoff" else 0), "menu"))) for i_ in range(3)}
-check(any("журналу" in x for x in sub["Дані"]) and any("Excel" in x for x in sub["Дані"]) and any("буфера" in x for x in sub["Дані"]) and any("Обходи" in x for x in sub["Дані"]), f"меню «Дані»: {sub['Дані']}")
+check(any("журналу" in x for x in sub["Дані"]) and any("Excel" in x for x in sub["Дані"]) and any("буфера" in x for x in sub["Дані"]) and any("обходи" in x for x in sub["Дані"]), f"меню «Дані»: {sub['Дані']}")
 check(any("Фази" in x for x in sub["Налаштування"]) and any("Групи стиглості" in x for x in sub["Налаштування"]) and any("Погода" in x for x in sub["Налаштування"]), f"меню «Налаштування»: {sub['Налаштування']}")
 check(any("Бланк" in x for x in sub["Файл"]) and any("проєкт" in x for x in sub["Файл"]), "меню «Файл»: проєкт, бланк, Excel")
 check(not any("ранній/пізній" in str(x.cget("text")) for x in all_w(w.win) if x.winfo_class() == "Label"), "поріг «ранній/пізній» прибрано з головного вікна (він у вікні результатів)")
@@ -108,6 +122,7 @@ ed._ask = lambda p=None: {"name": "Інша назва", "bbch": ""}; ed.lb.sele
 ed.delete(); check(len(ed.phases) == 15 and all(p["key"] != "моя_фаза" for p in ed.phases), "редактор: видалення")
 ed.reset(); ed.delete(); ed.ok(); check(len(res["p"]) == 14, "OK повертає змінений список"); 
 ed2 = PW.PhaseEditor(w2.win, [], P.preset_phases("pome"), lambda ph: None); n_w = len(LOG["warn"]); ed2.ok(); check(len(LOG["warn"]) == n_w + 1 and ed2.win.winfo_exists(), "порожній список фаз не приймається"); ed2.win.destroy()
+[t_.destroy() for t_ in w2.win.winfo_children() if isinstance(t_, tk.Toplevel) and t_.title() == "Фази"]           # закрити редактор, що відкрився сам для «Власного набору»
 w2.edit_phases(); root.update(); eds = [t for t in w2.win.winfo_children() if isinstance(t, tk.Toplevel) and t.title() == "Фази"]; check(len(eds) == 1, "«Фази…» відкриває редактор"); [t.destroy() for t in eds]
 
 print("\n== 5. Вставка, Excel, проєкт")
