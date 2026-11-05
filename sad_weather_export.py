@@ -158,7 +158,11 @@ def spec_years(rep):
     cols = _opt_cols(rep, cols)
     if rep["years"] and "anom" in rep["years"][0]:
         cols += [("Δt від норми, °C", lambda r: r["anom"]["d_tmean"], 1, "num", True),
+                 ("Δ опадів від норми, мм", lambda r: r["anom"].get("d_prec"), 0, "num", True),
                  ("Опади, % норми", lambda r: r["anom"]["prec_pct"], 0, "num", True),
+                 ("Δ САТ >10 °C від норми", lambda r: r["anom"].get("d_sat_10"), 0, "num", True),
+                 ("Δ СЕТ від норми", lambda r: r["anom"].get("d_set"), 0, "num", False),
+                 ("Δ ГТК від норми", lambda r: r["anom"].get("d_htc"), 2, "num", True),
                  ("Оцінка опадів", lambda r: W.precip_deviation_class(r["anom"]["prec_pct"]), None, "text", False)]
     return {"key": "years", "title": f"Метеорологічні умови за роками (вікно {d1:02d}.{m1:02d}–{d2:02d}.{m2:02d})",
             "kind": "table", "cols": cols, "rows": rep["years"]}

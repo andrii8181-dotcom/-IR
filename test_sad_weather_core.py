@@ -263,6 +263,9 @@ check(used == [2018, 2019, 2020] and close(norm["tmean"], 15.0), "норма t =
 check(close(norm["prec_sum"], 2.0*214*1.0, 1e-6), f"норма опадів = {norm['prec_sum']:.1f}")
 an = W.anomaly_row(W.period_stats(yrs[2019]), norm)
 check(close(an["d_tmean"], 1.0) and close(an["prec_pct"], 80.0), f"2019: Δt=+1,0; опади {an['prec_pct']:.0f}% норми")
+st19 = W.period_stats(yrs[2019])
+check(close(an["d_prec"], st19["prec_sum"] - norm["prec_sum"]) and close(an["d_sat_10"], st19["sat_10"] - norm["sat_10"]) and close(an["d_set"], st19["set"] - norm["set"])
+      and close(an["d_htc"], st19["htc"] - norm["htc"]), f"2019: Δ опадів {an['d_prec']:+.1f} мм, Δ САТ>10 {an['d_sat_10']:+.0f}, Δ СЕТ {an['d_set']:+.0f}, Δ ГТК {an['d_htc']:+.2f} = рік − норма")
 check(W.precip_deviation_class(80.0) == "в межах норми" and W.precip_deviation_class(79.9) == "суттєво нижче норми"
       and W.precip_deviation_class(120.1) == "суттєво вище норми", "відхилення >20 % – суттєві (джерело ЖДТУ)")
 a, b = W.window_for_year(2023, 2, 29, 3, 1)

@@ -596,14 +596,14 @@ def normal_from_years(series_by_year, **kw):
     return norm, sorted(stats)
 
 def anomaly_row(stats, norm):
-    """Відхилення року від норми: Δt (°C), опади у % норми, ΔСАТ."""
+    """Відхилення року від норми: Δt (°C), Δ опадів (мм) і опади у % норми, ΔСАТ >10 °C, ΔСЕТ, ΔГТК."""
     def d(k): 
         a, b = stats.get(k, NAN), norm.get(k, NAN)
         return (a - b) if not (math.isnan(a) or math.isnan(b)) else NAN
     pn = norm.get("prec_sum", NAN)
     pct = (stats["prec_sum"] / pn * 100.0) if (pn and not math.isnan(pn) and pn > 0
                                                and not math.isnan(stats["prec_sum"])) else NAN
-    return {"d_tmean": d("tmean"), "prec_pct": pct, "d_sat_10": d("sat_10"), "d_htc": d("htc")}
+    return {"d_tmean": d("tmean"), "d_prec": d("prec_sum"), "prec_pct": pct, "d_sat_10": d("sat_10"), "d_set": d("set"), "d_htc": d("htc")}
 
 def precip_deviation_class(pct):
     """Оцінка за відхиленням опадів від норми (джерело ЖДТУ: відхилення понад 20 % –

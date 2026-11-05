@@ -263,6 +263,7 @@ class PhenologyWindow:
         self.preset_var = tk.StringVar(value=P.PRESETS["pome"]["name"])
         cb = ttk.Combobox(tb, textvariable=self.preset_var, values=[P.PRESETS[k]["name"] for k in P.PRESET_ORDER], state="readonly", width=34); cb.pack(side=tk.LEFT, padx=2)
         cb.bind("<<ComboboxSelected>>", self._on_preset)
+        tk.Button(tb, text="✎ Змінити фази…", font=RF, command=self.edit_phases).pack(side=tk.LEFT, padx=3)
         tk.Label(tb, text="  Стандарт:", font=RB, fg="#1a4b8c").pack(side=tk.LEFT); self.std_var = tk.StringVar()
         self.std_cb = ttk.Combobox(tb, textvariable=self.std_var, state="readonly", width=22, postcommand=self._refresh_std); self.std_cb.pack(side=tk.LEFT, padx=3)
         self.std_cb.bind("<<ComboboxSelected>>", lambda e: setattr(self, "standard", "" if self.std_var.get() == "(середнє за сортами)" else self.std_var.get()))
@@ -530,6 +531,7 @@ class PhenologyWindow:
     def _on_preset(self, ev=None):
         key = next(k for k in P.PRESET_ORDER if P.PRESETS[k]["name"] == self.preset_var.get())
         self._save_current(); self.preset_key = key; self.phases = P.preset_phases(key); self._write_grid(self.years_data.get(self.cur_year, [])); self._validate_all()
+        if not self.phases: self.win.after_idle(self.edit_phases)          # власний набір порожній – одразу редактор, щоб додати фази
 
     def edit_phases(self):
         def ok(phases):
