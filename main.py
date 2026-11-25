@@ -729,6 +729,15 @@ Email: sad.stat.support@gmail.com
             "Відкрийте відповідний аналіз вручну і\n"
             "скористайтесь «📂 Відкрити проект» у тому вікні.")
 
+    import sad_cloud_ui as _CU
+    cloud_btn = tk.Button(proj_f, text=_CU.account_text(), bg=C["card"], fg=C["text"], font=("Arial",10), relief=tk.FLAT, padx=12, pady=6,
+                          cursor="hand2", activebackground=C["card_hov"], command=lambda: _CU.account_dialog(root))
+    cloud_btn.pack(side=tk.LEFT, padx=4)
+    def _cloud_btn_refresh():
+        try: cloud_btn.configure(text=_CU.account_text())
+        except tk.TclError: pass
+    _CU.on_account_change(_cloud_btn_refresh)
+
     tk.Button(proj_f, text="📂 Відкрити проект", bg=C["card"], fg=C["text"],
               font=("Arial",10), relief=tk.FLAT, padx=12, pady=6,
               cursor="hand2", activebackground=C["card_hov"],

@@ -7,3 +7,7 @@ selftest.log
 .sad_usage.json
 .sad_weather_cache/
 *.spec.bak
+
+# хмара
+cloud/node_modules/
+cloud/*.log
