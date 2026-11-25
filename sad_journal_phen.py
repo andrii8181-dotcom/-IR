@@ -298,8 +298,14 @@ class VisitsJournalDialog:
                 e = tk.Entry(self.gf, font=RF, width=9, justify="center"); e.grid(row=i + 1, column=2 + j, padx=1, pady=1)
                 v = st.get("values", {}).get(pl["id"], {}).get(d)
                 if v is not None: e.insert(0, str(v))
+                e.bind("<Return>", lambda ev, i=i, j=j: self._down(i, j)); e.bind("<Down>", lambda ev, i=i, j=j: self._down(i, j))
                 self.cells[(i, j)] = e
         if not st["dates"]: tk.Label(self.gf, text="Ще немає обходів – натисніть «＋ Обхід (дата)…».", font=RF, fg="#8c5a1a").grid(row=len(self.t.plots) + 2, column=0, columnspan=4, sticky="w", pady=6)
+
+    def _down(self, i, j):
+        """Enter / ↓ – на клітинку нижче (той самий обхід)."""
+        if (i + 1, j) in self.cells: self.cells[(i + 1, j)].focus_set(); self.cells[(i + 1, j)].select_range(0, tk.END)
+        return "break"
 
     def add_visit(self, date=None):
         self._store(); st = self._cur()
@@ -340,6 +346,7 @@ class VisitsJournalDialog:
             if r["date"] is None: none += 1; continue
             j = idx[r["key"]]; e = self.t.cells[(r["i"], j)]; e.delete(0, tk.END); e.insert(0, P.fmt_date(r["date"])); self.t.edited.add((r["i"], j)); n += 1; first += r["kind"] == "first"
         self.t.dirty = True; self.t._validate()
+        self.win.lift(); self.win.focus_force()
         self.msg.configure(text=f"Записано в таблицю дат: {n}" + (f"; поріг досягнуто вже на першому обході (дата не пізніша за нього): {first}" if first else "") +
                            (f"; поріг ще не досягнуто: {none}" if none else "") + ". Не забудьте «💾 Зберегти» в таблиці фенології.", fg="#1a6b1a" if n else "#8c5a1a")
 

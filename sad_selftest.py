@@ -7,7 +7,7 @@
 """
 import os, sys, io, tempfile, traceback, datetime as dt
 
-MODULES = ['sad_app', 'sad_assoc_core', 'sad_assoc_sections', 'sad_breeding', 'sad_breeding_core', 'sad_breeding_ui', 'sad_breeding_win', 'sad_chart_style_dlg', 'sad_clip', 'sad_cluster_pca', 'sad_common',
+MODULES = ['sad_app', 'sad_assoc_core', 'sad_assoc_sections', 'sad_breeding', 'sad_breeding_core', 'sad_breeding_ui', 'sad_breeding_win', 'sad_chart_style_dlg', 'sad_clip', 'sad_cloud', 'sad_cloud_ui', 'sad_cluster_pca', 'sad_common',
            'sad_control_core', 'sad_corr_core', 'sad_corr_sections', 'sad_correlation', 'sad_descriptive_ttest', 'sad_design_core',
            'sad_design_sections', 'sad_gencorr_core', 'sad_gencorr_sections', 'sad_gxe_core', 'sad_het_ord_sections',
            'sad_heterosis_core', 'sad_homogeneous', 'sad_journal_trial', 'sad_manova', 'sad_mixed_core', 'sad_mixed_sections',
@@ -152,6 +152,20 @@ def run(main_module, out_path=None):
             QL.fill_payloads(data, "descriptive", "m", "R58x40"); rp = os.path.join(d, "roll.pdf")      # рулон для принтера етикеток
             assert QL.render_labels_pdf(rp, data, "R58x40", {"mono": True, "printer_dpi": 203}) == 8 and open(rp, "rb").read(4) == b"%PDF"
             img = QL.render_label_png(data, data["plots"][0], "R58x40", {"mono": True}, dpi=203); assert img.mode == "1" and img.size == (464, 320), img.size
+            st_ = {}; assert QL.assign_ciphers(data, st_) and len(st_["ciphers"]) == len(data["plots"])            # сліпий облік
+            QL.fill_payloads(data, "blind", "m", "M"); assert data["plots"][0]["payload"].startswith("SAD1B;") and QL.parse_payload(data["plots"][0]["payload"])["valid"]
+            bp_ = os.path.join(d, "blind.pdf"); QL.render_labels_pdf(bp_, data, "M", {"style": "blind"}); assert open(bp_, "rb").read(4) == b"%PDF"
+        finally: shutil.rmtree(d, ignore_errors=True)
+    def t_cloud():
+        import tempfile, shutil, ssl, datetime as _d
+        import sad_cloud as CL
+        assert ssl.create_default_context().cert_store_stats().get("x509_ca", 0) > 0 or sys.platform != "win32"      # сертифікати Windows для HTTPS
+        assert CL.dec(CL.enc({"a": [1, 2.5, "т", None]})) == {"a": [1, 2.5, "т", None]} and CL.to_journal_value(CL.to_cloud_value("154,5", False, 2026), False) == "154,5"
+        d = tempfile.mkdtemp()
+        try:
+            st = CL.SyncState(d); st.bind("u_K7M2", "FA9A", "u")
+            it, _ = CL.plan_push(st, {"year": "2026", "records": {"В": {"values": {"1:1": "5"}}}}, {(1, 1): 1}, "u", "a@b.ua")
+            st.enqueue(CL.serialize(it)); assert len(CL.SyncState(d).outbox()) == 1 and isinstance(CL.deserialize(st.outbox())[0][1]["clientTime"], _d.datetime)
         finally: shutil.rmtree(d, ignore_errors=True)
     def t_worldmap():
         import sad_worldmap as WM
@@ -186,6 +200,7 @@ def run(main_module, out_path=None):
                  ("фенологія: розбір дат, зведення, ANOVA з НІР і літерами, візити, дані з польового журналу", t_phenology),
                  ("експорт звіту: Word (таблиці з сіткою, графіки) і Excel", t_report),
                  ("QR-таблички: ділянки, QR (segno), PDF із кирилицею, PNG, Excel, маніфест", t_qrlabels),
+                 ("хмара: сертифікати HTTPS, значення, черга без зв'язку", t_cloud),
                  ("карта світу: дані, країна, найближче місто, пошук, відсікання", t_worldmap), ("копіювання таблиці: HTML-формат буфера", t_clip),
                  ("діаграми: усі 8 зі стилем користувача", t_chart_style)):
         _check(log, n, f)

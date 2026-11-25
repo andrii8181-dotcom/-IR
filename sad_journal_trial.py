@@ -165,6 +165,38 @@ def open_journal_plots(parent, multi_select=True):
     return rows, chosen, info
 
 
+def decode_blind_folder(blind_folder, key_path, out_folder):
+    """Сліпий облік → звичайні журнали: обліки з журналів виконавців (теки років у теці схеми для виконавців) переносяться на схему досліду
+    з ключа (ті самі ряд і місце). Результат – тека схеми з усіма роками, з якою працюють усі аналізи. → список років.
+    ValueError – ключ не того досліду або в теці немає журналів."""
+    with open(key_path, "r", encoding="utf-8") as f: key = json.load(f)
+    if key.get("format") != "SAD-blind-key": raise ValueError("Це не файл ключа сліпого обліку S.A.D. (…_КЛЮЧ.json).")
+    sch = key["scheme"]; sig = key["experiment"]["signature"]; years = []
+    pos_plot = {}
+    for pl in sch.get("plants") or []:
+        if pl.get("role") == HP_ROLE_RECORDED: pos_plot[f"{pl['row']}:{pl['position']}"] = pl
+    for nm in sorted(os.listdir(blind_folder)):
+        jp = os.path.join(blind_folder, nm, f"журнал_{nm}.sadp")
+        if not (nm.isdigit() and os.path.exists(jp)): continue
+        with open(jp, "r", encoding="utf-8") as f: bj = json.load(f)
+        bsig = ((bj.get("cfg") or {}).get("blind") or {}).get("signature")
+        if bsig != sig: raise ValueError(f"Журнал {nm} року належить іншому досліду чи іншій версії схеми (підпис {bsig or '–'}, у ключі {sig}).")
+        out = {"type": "field_journal", "version": bj.get("version", APP_VER), "year": nm, "cfg": dict(sch.get("cfg") or {}), "variant_names": sch.get("variant_names") or [],
+               "factor_defs": sch.get("factor_defs") or [], "plants": [dict(p) for p in sch.get("plants") or []], "records": bj.get("records") or {}, "series": bj.get("series")}
+        dead = {f"{p['row']}:{p['position']}": p.get("status") for p in bj.get("plants") or [] if p.get("status") not in (None, "", "ok")}
+        for p in out["plants"]:                                       # позначки випадіння, зроблені виконавцями
+            st = dead.get(f"{p['row']}:{p['position']}")
+            if st: p["status"] = st
+        os.makedirs(os.path.join(out_folder, nm), exist_ok=True)
+        with open(os.path.join(out_folder, nm, f"журнал_{nm}.sadp"), "w", encoding="utf-8") as f: json.dump(out, f, ensure_ascii=False, indent=2)
+        years.append(nm)
+    if not years: raise ValueError("У теці немає журналів за роками (теки 2025, 2026… з файлами журнал_<рік>.sadp).")
+    sc = {"type": sch.get("type", "multi_factor_scheme"), "factor_defs": sch.get("factor_defs") or [], "variant_names": sch.get("variant_names") or [],
+          "cfg": dict(sch.get("cfg") or {}), "plants": sch.get("plants") or []}
+    with open(os.path.join(out_folder, "схема.sadp"), "w", encoding="utf-8") as f: json.dump(sc, f, ensure_ascii=False, indent=1)
+    return years
+
+
 def aggregate_to_variant_level(factor_cols, rows, record_names):
     """Друге усереднення — рядки (варіант×повторність), вже усереднені в
     межах повторності, усереднюються ЩЕ РАЗ по повторностях: одне число
@@ -640,6 +672,19 @@ class FieldJournalWindow:
   «▶ Аналіз фенофаз» – результати за всі роки досліду (середні дати, різниця
   зі стандартом, ANOVA, графіки). Кожна фаза – це й звичайний показник
   журналу: в ANOVA та інших аналізах дата стає номером дня року.
+
+ХМАРА І ЗАСТОСУНОК НА ТЕЛЕФОНІ
+  Увійдіть у хмару в головному вікні («☁ Увійти в хмару…»). Схема з кодом
+  досліду (QR-таблички) сама потрапляє в хмару, кожне збереження журналу
+  одразу надсилається, а значення, які виконавці вносять у застосунку на
+  телефоні, щохвилини з'являються в журналі. Стан – у рядку «☁» над таблицею.
+  Без інтернету все зберігається на комп'ютері й надсилається пізніше.
+  «☁ Хмара і доступ…» – запросити виконавців за адресою пошти, задати
+  показники для застосунку, закрити облік року.
+  Якщо двоє внесли в ту саму клітинку різні значення, клітинка стає
+  помаранчевою, а над таблицею видно обидва значення: залиште правильне
+  й збережіть показник. Перед кожним оновленням із хмари попередня версія
+  журналу зберігається в теці схеми (.sad_cloud_backup).
 """
 
     def __init__(self, parent, gs=None):
@@ -701,6 +746,7 @@ class FieldJournalWindow:
                   command=self._show_indicator_by_years).pack(side=tk.LEFT, padx=4)
         tk.Button(top, text="📉 Динаміка серії", bg="#8c1a6b", fg="white", font=rf,
                   command=self._show_series_dynamics).pack(side=tk.LEFT, padx=4)
+        tk.Button(top, text="🔑 Розшифрувати…", font=rf, command=self._decode_blind).pack(side=tk.LEFT, padx=4)
         tk.Button(top, text="✏ Редагувати серію", font=rf,
                   command=self._edit_series).pack(side=tk.LEFT, padx=4)
         tk.Button(top, text="📚 Довідка", bg="#1a4b8c", fg="white", font=rf,
@@ -711,6 +757,15 @@ class FieldJournalWindow:
                      "щоб почати.",
                 font=("Times New Roman",11), fg="#888", anchor="w")
         self._info_lbl.pack(fill=tk.X, padx=8, pady=(0,4))
+        # ── Хмара: стан синхронізації (клік – вхід або «Хмара і доступ») ──
+        cf = tk.Frame(self.win); cf.pack(fill=tk.X, padx=8, pady=(0, 4))
+        self._cloud_lbl = tk.Label(cf, text="", font=("Times New Roman", 10), fg="#888", anchor="w", cursor="hand2")
+        self._cloud_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Button(cf, text="☁ Хмара і доступ…", font=("Times New Roman", 10), command=lambda: self._cloud.open_dialog()).pack(side=tk.RIGHT)
+        self._conflict_lbl = tk.Label(self.win, text="", font=("Times New Roman", 10), fg="#b45309", anchor="w", justify="left", wraplength=1300)
+        from sad_cloud_ui import JournalCloud
+        self._cloud = JournalCloud(self, self._cloud_lbl); self._cloud.show()
+        self.win.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # ── Легенда (та сама, що й у схемі) ───────────────
         self._legend_f = tk.Frame(self.win, bg="#f7f7f7", padx=8, pady=6)
@@ -731,6 +786,11 @@ class FieldJournalWindow:
                         lambda e: self._canvas.config(scrollregion=self._canvas.bbox("all")))
         self.win.bind("<MouseWheel>",
                       lambda e: self._canvas.yview_scroll(int(-1*(e.delta/120)),"units"))
+
+    def _on_close(self):
+        try: self._cloud.close()
+        except Exception: pass
+        self.win.destroy()
 
     def _show_help(self):
         win = tk.Toplevel(self.win); win.title("Довідка — Польовий журнал")
@@ -911,6 +971,7 @@ class FieldJournalWindow:
         self._build_legend()
         self._build_grid()
         self._check_series_due()
+        self._cloud.attach()
 
     def _today_str(self):
         return __import__("datetime").date.today().isoformat()
@@ -1054,6 +1115,8 @@ class FieldJournalWindow:
     def _build_grid(self):
         for w in self.inner.winfo_children(): w.destroy()
         self._entry_widgets = {}
+        conflicts = self.records.get(self._current_indicator_name, {}).get("conflicts", {}) if self._current_indicator_name else {}
+        self._show_conflicts(conflicts)
         if not self.plants: return
 
         by_row = {}
@@ -1082,7 +1145,7 @@ class FieldJournalWindow:
                 if p.role == HP_ROLE_RECORDED:
                     key = f"{row_num}:{pos}"
                     e = tk.Entry(self.inner, width=6, font=("Times New Roman",9),
-                                bg="#e8f5e9", justify="center")
+                                bg="#ffcc80" if key in conflicts else "#e8f5e9", justify="center")
                     e.grid(row=grid_row, column=pos, padx=1, pady=1)
                     if key in self._working_values: e.insert(0, str(self._working_values[key]))
                     e.bind("<FocusOut>", lambda ev, r=row_num, po=pos: self._on_cell_edit(r, po))
@@ -1099,6 +1162,16 @@ class FieldJournalWindow:
                              bg=color, font=("Times New Roman",9)
                              ).grid(row=grid_row, column=pos, padx=1, pady=1)
         _bind_nav(self._grid_as_2d(rows, max_pos, by_row), self.win)
+
+    def _show_conflicts(self, conflicts):
+        """Значення з хмари, що розійшлися (різні люди внесли різне в ту саму клітинку): клітинки помаранчеві, тут – обидва значення.
+        Залиште правильне значення й збережіть показник – позначка зникне."""
+        if not conflicts:
+            self._conflict_lbl.pack_forget(); return
+        items = [f"{k}: " + " / ".join(f"{c.get('value')} ({(c.get('author') or '?').split('@')[0]})" for c in v) for k, v in sorted(conflicts.items())]
+        self._conflict_lbl.configure(text=f"⚠ Розбіжності з поля ({len(items)}) – клітинки виділено помаранчевим, у клітинці новіше значення. "
+                                          "Залиште правильне й збережіть показник:  " + ";  ".join(items[:12]) + (" …" if len(items) > 12 else ""))
+        self._conflict_lbl.pack(fill=tk.X, padx=8, pady=(0, 4), after=self._legend_f)
 
     def _grid_as_2d(self, rows, max_pos, by_row):
         """Формує 2D-масив лише з редагованих (облікових) клітинок —
@@ -1558,6 +1631,7 @@ class FieldJournalWindow:
             self._journal_path = path
             self._sync_dead_to_scheme_file()
             self._newly_marked_dead.clear()
+            self._cloud.on_saved()
             messagebox.showinfo("Збережено", f"Показник «{indicator_name}» "
                                 f"збережено в журналі:\n{path}")
             return True
@@ -1786,6 +1860,22 @@ class FieldJournalWindow:
                  font=("Times New Roman",10), fg="#555").pack(fill=tk.X, padx=10, pady=(8,4))
         frm, _ = make_tv(win, headers, tbl_rows)
         frm.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0,10))
+
+    def _decode_blind(self, blind_folder=None, key_path=None, out_folder=None):
+        """Сліпий облік: розшифрувати журнали виконавців ключем – у нову теку зі звичайними журналами для аналізу."""
+        if blind_folder is None:
+            blind_folder = self._scheme_folder if (self._base_scheme_data or {}).get("cfg", {}).get("blind") else None
+            blind_folder = blind_folder or filedialog.askdirectory(parent=self.win, title="Тека схеми для виконавців (з теками років)")
+            if not blind_folder: return None
+        if key_path is None:
+            key_path = filedialog.askopenfilename(parent=self.win, title="Файл ключа (…_КЛЮЧ.json)", filetypes=[("Ключ S.A.D.", "*.json")])
+            if not key_path: return None
+        out_folder = out_folder or (blind_folder.rstrip("/\\") + "_розшифровано")
+        try: years = decode_blind_folder(blind_folder, key_path, out_folder)
+        except (ValueError, OSError, KeyError) as e: messagebox.showwarning("Розшифрування", str(e), parent=self.win); return None
+        messagebox.showinfo("Розшифрування", f"Розшифровано журнали за роки: {', '.join(years)}.\nТека для аналізу:\n{out_folder}\n\n"
+                            "Відкрийте її тут чи в будь-якому аналізі («З польового журналу…») – дані вже з назвами варіантів.", parent=self.win)
+        return years
 
     def _show_indicator_by_years(self):
         """Швидкий огляд: як один показник змінювався по роках, по кожному

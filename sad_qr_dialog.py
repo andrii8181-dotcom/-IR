@@ -6,10 +6,11 @@ from tkinter import ttk, messagebox, filedialog
 import sad_qrlabels as Q
 
 RF = ("Times New Roman", 11); RB = ("Times New Roman", 11, "bold"); SM = ("Times New Roman", 9)
-STYLES = {"Описовий (читає будь-який телефон)": "descriptive", "Компактний (лише службовий рядок)": "compact"}
+STYLES = {"Описовий (читає будь-який телефон)": "descriptive", "Компактний (лише службовий рядок)": "compact",
+          "Сліпий облік (лише шифр ділянки)": "blind"}
 ECCS = {"M – звичайна (рекомендовано)": "m", "Q – підвищена стійкість до забруднення": "q"}
 DEFAULTS = {"exp_name": "", "exp_id": "", "origin": "ряд 1, місце 1 – лівий верхній кут карти", "preset": "M", "style": "descriptive", "ecc": "m", "neighbors": True, "cut_lines": True,
-            "mono": True, "printer_dpi": 203}
+            "mono": True, "printer_dpi": 203, "ciphers": {}, "cipher_sig": ""}
 CUSTOM_ROLL = "Рулон – свій розмір…"
 DPIS = {"203 dpi (8 точок/мм) – більшість принтерів етикеток": 203, "300 dpi (12 точок/мм)": 300}
 ROLL_HINT = ("Друк на принтері етикеток: у налаштуваннях драйвера задайте розмір етикетки {w}×{h} мм і проміжок між етикетками (зазвичай 2–3 мм), "
@@ -79,7 +80,11 @@ class QRLabelsDialog:
             if r < 6: b.grid(row=r, column=0, columnspan=2, sticky="we", pady=1)                      # кожна дія – у власному рядку
             else: b.grid(row=6, column=r - 6, sticky="we", pady=(6, 1), padx=(0, 4) if r == 6 else (4, 0))
             self.buttons.append(b)
-        a.columnconfigure(0, weight=1); a.columnconfigure(1, weight=1)
+        a.columnconfigure(0, weight=1); a.columnconfigure(1, weight=1); self._actions = a
+        self.blind_box = tk.LabelFrame(left, text="Сліпий облік – ключ і схема для виконавців", font=RB, fg="#c62828", padx=8, pady=6)
+        self.b_key = tk.Button(self.blind_box, text="🔑 Ключ шифрів (лише для керівника)…", font=RF, anchor="w", bg="#fff3e0", command=self.save_key); self.b_key.pack(fill=tk.X, pady=1)
+        self.b_bsch = tk.Button(self.blind_box, text="👥 Схема для виконавців (для польового журналу)…", font=RF, anchor="w", command=self.save_blind_scheme); self.b_bsch.pack(fill=tk.X, pady=1)
+        self.blind_msg = tk.Label(self.blind_box, text="", font=SM, fg="#8c5a1a", wraplength=440, justify="left"); self.blind_msg.pack(anchor="w", pady=(2, 0))
         tk.Button(left, text="Закрити", font=RF, command=self.win.destroy).pack(side=tk.BOTTOM, anchor="e", pady=(8, 0))
         pv = tk.LabelFrame(right, text="Попередній перегляд (реальний розмір, масштаб екрана)", font=RB, padx=8, pady=6); pv.pack(fill=tk.X)
         pr = tk.Frame(pv); pr.pack(fill=tk.X)
@@ -183,6 +188,16 @@ class QRLabelsDialog:
             for b in self.buttons: b.configure(state=tk.DISABLED)
             return
         self.err.configure(text="")
+        blind = self.style == "blind"
+        if blind:
+            fresh = Q.assign_ciphers(self.data, self.settings)
+            self._ciphers_new = getattr(self, "_ciphers_new", False) or fresh          # створені в цьому сеансі – ще не збережені у файлі схеми
+            self.blind_box.pack(fill=tk.X, pady=(8, 0), after=self._actions)
+            self.blind_msg.configure(text=("Шифри створено щойно. Збережіть схему досліду в конструкторі («💾 Зберегти схему») і ключ – інакше наступного разу шифри будуть інші, "
+                                           "а вже надруковані таблички не збігатимуться." if self._ciphers_new else
+                                           "Шифри збережено у схемі досліду – повторний друк дасть ті самі шифри.") +
+                                          " Виконавцям передавайте таблички, розкладку й схему для виконавців; ключ і файл схеми досліду – лише в керівника.")
+        else: self.blind_box.pack_forget()
         self.win.configure(cursor="watch" if len(self.data["plots"]) > 300 else "")
         Q.fill_payloads(self.data, self.style, self.ecc, self.key); sm = Q.summary(self.data, self.key, self.ecc, self.style); self.win.configure(cursor="")
         e = self.data["exp"]
@@ -240,9 +255,26 @@ class QRLabelsDialog:
         d = filedialog.askdirectory(parent=self.win, title="Тека для комплекту QR-табличок")
         if d:
             folder = os.path.join(d, f"{self._stem()}_QR"); self.win.configure(cursor="watch"); self.win.update_idletasks()
-            try: files = Q.save_all(folder, self.data, self.key, self.opts(), self.opts()["printer_dpi"] if self.is_roll else 300)
+            try: files = Q.save_all(folder, self.data, self.key, self.opts(), self.opts()["printer_dpi"] if self.is_roll else 300, scheme=self.scheme)
             finally: self.win.configure(cursor="")
-            self._done(f"Комплект ({len(files)} файлів: PDF табличок, PDF розкладки, Excel, маніфест, PNG) у теці", folder)
+            self._done(f"Комплект ({len(files)} файлів: PDF табличок, PDF розкладки, Excel, маніфест, PNG" + (", схема для виконавців; ключа в комплекті немає – збережіть його окремо" if self.data.get("blind") else "") + ") у теці", folder)
+    def save_key(self, path=None):
+        if not self._need() or not self.data.get("blind"): return None
+        p = path or filedialog.asksaveasfilename(parent=self.win, defaultextension=".json", initialfile=f"{self._stem()}_КЛЮЧ.json", filetypes=[("Ключ S.A.D.", "*.json")], title="Зберегти ключ сліпого обліку")
+        if not p: return None
+        files = Q.export_key(p, self.data, self.scheme)
+        if path is None: self._done("Ключ сліпого обліку (JSON – для розшифрування журналів, Excel – таблиця «шифр → варіант»). Зберігайте окремо від виконавців", "\n".join(files))
+        return files
+    def save_blind_scheme(self, path=None):
+        if not self._need() or not self.data.get("blind"): return None
+        asked = path is None
+        if asked:
+            d = filedialog.askdirectory(parent=self.win, title="Тека для схеми виконавців (у ній польовий журнал створить теки років)")
+            if not d: return None
+            sub = os.path.join(d, f"{self._stem()}_схема_для_виконавців"); os.makedirs(sub, exist_ok=True); path = os.path.join(sub, "схема.sadp")
+        Q.export_blind_scheme(path, self.data, self.scheme)
+        if asked: self._done("Схема для виконавців (відкривається в польовому журналі; замість варіантів – шифри)", path)
+        return path
     def print_pdf(self, what):
         if not self._need(): return
         folder = os.path.join(tempfile.gettempdir(), "SAD_QR"); os.makedirs(folder, exist_ok=True)

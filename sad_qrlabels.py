@@ -20,6 +20,9 @@ FACTOR_LETTERS = "ABCDEFGHIJ"
 ID_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"           # без 0, 1, I, L, O – щоб не плутати при ручному введенні
 CHECK_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 FORMAT = "SAD1"
+FORMAT_BLIND = "SAD1B"                                     # сліпий облік: у QR лише шифр ділянки
+CIPHER_LEN = 5                                             # 4 випадкові символи + контрольний (абетка ID_ALPHABET)
+BLIND_COLOR = "#455a64"                                    # однаковий колір для всіх ділянок (колір не видає варіант)
 PT = 25.4 / 72.0                                           # міліметрів в одному пункті
 PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f", "#0b3d91", "#a00000"]
 
@@ -61,6 +64,41 @@ def suggest_exp_id(name, salt=""):
 
 def human_code(exp_id, plot, rep, variant):
     return f"{exp_id}-{plot:03d}-{check_char(exp_id, plot, rep, variant)}"
+
+
+def make_ciphers(n, rnd=None, used=()):
+    """n різних випадкових шифрів ділянок (наприклад, «K7Q4M»): 4 символи + контрольний (Luhn mod 31). Випадкові, тож за схемою їх не відновити."""
+    import secrets
+    rnd = rnd or secrets.SystemRandom(); used = set(used); out = []
+    while len(out) < n:
+        body = "".join(rnd.choice(ID_ALPHABET) for _ in range(CIPHER_LEN - 1)); c = body + luhn_mod_n_check(body, ID_ALPHABET)
+        if c not in used: used.add(c); out.append(c)
+    return out
+
+
+def valid_cipher(c):
+    return isinstance(c, str) and len(c) == CIPHER_LEN and all(ch in ID_ALPHABET for ch in c) and luhn_mod_n_valid(c, ID_ALPHABET)
+
+
+def assign_ciphers(data, store):
+    """Сліпий облік: кожній ділянці – власний шифр. store – налаштування QR у схемі ('ciphers' {номер ділянки: шифр}, 'cipher_sig').
+    Шифри стабільні між друками; якщо схему змінено (інший підпис) – створюються нові. → True, якщо шифри створено заново."""
+    sig = data["exp"]["signature"]; cur = dict(store.get("ciphers") or {})
+    fresh = store.get("cipher_sig") != sig or any(str(p["plot"]) not in cur for p in data["plots"]) or not all(valid_cipher(cur.get(str(p["plot"]))) for p in data["plots"])
+    if fresh:
+        cur = {str(p["plot"]): c for p, c in zip(data["plots"], make_ciphers(len(data["plots"])))}
+        store["ciphers"] = cur; store["cipher_sig"] = sig
+    E = data["exp"]["id"]
+    for p in data["plots"]: p["cipher"] = cur[str(p["plot"])]; p["code"] = f"{E}-{p['cipher']}"
+    if not data.get("blind"):                                         # назва досліду може підказати, що вивчається, – у матеріалах для виконавців її немає (у ключі є)
+        data["exp"]["name_full"] = data["exp"]["name"]; data["exp"]["name"] = ""
+    data["blind"] = True
+    return fresh
+
+
+def blind_check(exp_id, plot, cipher):
+    """Контрольний символ сліпого службового рядка: Luhn mod 36 за рядком E + P(4 цифри) + K."""
+    return luhn_mod_n_check(f"{exp_id}{plot:04d}{cipher}")
 
 
 def scheme_signature(factor_defs, plots):
@@ -152,8 +190,23 @@ def machine_line(exp, pl):
     return f"{FORMAT};E={exp['id']};P={pl['plot']};R={pl['rep']};V={pl['variant']};S={exp['signature']};C={pl['check']}"
 
 
+def blind_line(exp, pl):
+    return f"{FORMAT_BLIND};E={exp['id']};P={pl['plot']};K={pl['cipher']};S={exp['signature']};C={blind_check(exp['id'], pl['plot'], pl['cipher'])}"
+
+
 def parse_payload(text):
-    """Розбирає вміст QR (описовий чи службовий) → dict(E,P,R,V,S,C, valid). Кидає ValueError, якщо це не табличка S.A.D."""
+    """Розбирає вміст QR (описовий чи службовий) → dict(E,P,R,V,S,C, valid); сліпий (SAD1B) → dict(E,P,K,S,C, valid, blind=True).
+    Кидає ValueError, якщо це не табличка S.A.D."""
+    mb = re.search(rf"{FORMAT_BLIND};([^\n\r]*)", text)
+    if mb:
+        kv = dict(part.split("=", 1) for part in mb.group(1).split(";") if "=" in part)
+        for k in ("E", "P", "K", "S", "C"):
+            if k not in kv: raise ValueError(f"У сліпому службовому рядку немає поля {k}.")
+        try: p = int(kv["P"])
+        except ValueError: raise ValueError("Номер ділянки має бути цілим.")
+        try: ok = valid_cipher(kv["K"]) and luhn_mod_n_valid(f"{kv['E']}{p:04d}{kv['K']}{kv['C']}")
+        except ValueError: ok = False
+        return {"E": kv["E"], "P": p, "K": kv["K"], "S": kv["S"], "C": kv["C"], "R": None, "V": None, "valid": ok, "blind": True}
     m = re.search(rf"{FORMAT};([^\n\r]*)", text)
     if not m: raise ValueError("Це не QR-табличка S.A.D. (немає службового рядка SAD1).")
     kv = dict(part.split("=", 1) for part in m.group(1).split(";") if "=" in part)
@@ -172,6 +225,9 @@ def _short(s, n):
 
 def payload_tiers(exp, pl, style="descriptive"):
     """Варіанти вмісту від найповнішого до мінімального (щоб за потреби зменшити щільність QR; кирилиця займає по 2 байти)."""
+    if style == "blind":
+        if "cipher" not in pl: raise ValueError("Для сліпого обліку спершу призначте шифри (assign_ciphers).")
+        return [("min", blind_line(exp, pl))]
     mach = machine_line(exp, pl)
     if style == "compact": return [("min", mach)]
     L1 = f"Дослід {exp['id']}"
@@ -377,9 +433,45 @@ def _fit_lines(levels_long, levels_short, size, width, y, limit, step):
     return wrap_text(" + ".join(levels_short.split(" + ")), size, width, max_lines)
 
 
+def _blind_label_prims(data, pl, key, qr, opts):
+    """Табличка сліпого обліку: код досліду, шифр ділянки, номер і місце в полі. Без назв факторів, номера й кольору варіанта, позначки стандарту."""
+    exp = data["exp"]; P = LABEL_PRESETS[key]; w, h, k = P["w"], P["h"], P["k"]
+    col, fg, ink, grey = BLIND_COLOR, "#ffffff", "#111111", "#555555"
+    if opts.get("mono"): col, fg, ink, grey = "#000000", "#ffffff", "#000000", "#000000"
+    band = 5.0 * k; top_r = f"№ {pl['plot']} з {exp['n_plots']}"
+    prims = [("rect", 0, 0, w, h, "#ffffff", "#9a9a9a", 0.15), ("rect", 0, 0, w, band, col, None, 0),
+             ("text", 1.8 * k, band * 0.72, f"ДОСЛІД {exp['id']}", fit_size(f"ДОСЛІД {exp['id']}", 7.5 * k, w * 0.55, True), True, "l", fg),
+             ("text", w - 1.8 * k, band * 0.72, top_r, fit_size(top_r, 7.5 * k, w * 0.42, True), True, "r", fg)]
+    qs = P["qr"]; dpi = opts.get("snap_dpi")
+    def qr_at(x, y, size): return snap_qr(x, y, size, len(qr), dpi) if dpi else (x, y, size)
+    nb = (f"ліворуч {('№' + str(pl['left'])) if pl['left'] else 'початок ряду'} · праворуч {('№' + str(pl['right'])) if pl['right'] else 'кінець ряду'}") if opts.get("neighbors", True) else ""
+    foot = f"схема {exp['signature']}"; pos = pl["pos_text"]
+    if P["layout"] == "h":
+        qx, qy, qs = qr_at(1.0 * k, band + 0.6 * k, qs); prims.append(("qr", qx, qy, qs, qr))
+        prims.append(("text", qx + qs / 2, qy + qs + 2.9 * k, pl["code"], fit_size(pl["code"], 6.4 * k, qs, True), True, "c", ink))
+        rx = qx + qs + 1.0 * k; rw = w - rx - 1.4 * k; y = band + 1.0 * k
+        big = fit_size(pl["cipher"], (19 if k < 1.3 else 26) * k, rw, True); y += big * PT * 0.9; prims.append(("text", rx, y, pl["cipher"], big, True, "l", ink))
+        y += 3.6 * k; prims.append(("text", rx, y, "шифр ділянки", fit_size("шифр ділянки", 6.4 * k, rw), False, "l", grey))
+        yb = h - 1.6 * k
+        if nb and k >= 1.3: prims.append(("text", rx, yb - 8.4 * k, nb, fit_size(nb, 6.4 * k, rw), False, "l", ink))
+        prims.append(("text", rx, yb - (4.2 * k if k >= 1.3 else 0), _short(pos, 44), fit_size(_short(pos, 44), 6.4 * k, rw), False, "l", grey))
+        if k >= 1.3: prims.append(("text", rx, yb, foot, fit_size(foot, 5.6 * k, rw), False, "l", grey))
+    else:
+        qx, qy, qs = qr_at((w - qs) / 2, band + 2.0 * k, qs); prims.append(("qr", qx, qy, qs, qr)); y = qy + qs + 1.0 * k
+        prims.append(("text", w / 2, y + 2.8 * k, pl["code"], fit_size(pl["code"], 9.0 * k, w - 4, True), True, "c", ink)); y += 6.5 * k
+        big = fit_size(pl["cipher"], 26 * k, w - 6 * k, True); y += big * PT * 0.95; prims.append(("text", w / 2, y, pl["cipher"], big, True, "c", ink))
+        y += 4.0 * k; prims.append(("text", w / 2, y, "шифр ділянки", fit_size("шифр ділянки", 7.4 * k, w - 6 * k), False, "c", grey))
+        yb = h - 1.8 * k
+        if nb: prims.append(("text", w / 2, yb - 8.6 * k, nb, fit_size(nb, 6.8 * k, w - 4), False, "c", ink))
+        prims.append(("text", w / 2, yb - 4.4 * k, _short(pos, 60), fit_size(_short(pos, 60), 6.8 * k, w - 4), False, "c", grey))
+        prims.append(("text", w / 2, yb, foot, fit_size(foot, 6.2 * k, w - 4), False, "c", grey))
+    return prims
+
+
 def label_prims(data, pl, key, qr, opts=None):
     """Список примітивів однієї таблички: ('rect', x, y, w, h, fill, stroke, lw) ('text', x, y_base, s, pt, bold, align, color) ('qr', x, y, size, matrix)."""
     opts = opts or {}; exp = data["exp"]; by_no = {p["plot"]: p for p in data["plots"]}
+    if data.get("blind"): return _blind_label_prims(data, pl, key, qr, opts)
     P = LABEL_PRESETS[key]; w, h, k = P["w"], P["h"], P["k"]
     col = variant_color(pl["variant"]); fg = on_color(col); ink = "#111111"; grey = "#555555"
     if opts.get("mono"):                                              # термодрук: лише чорне й біле (сірі заливки й сірий текст друкуються растром)
@@ -579,12 +671,13 @@ def _trunc(s, size, max_w, bold=False):
 
 def instruction_page(data, key, opts, info):
     exp = data["exp"]; W, H = 210, 297; m = 14; pr = []
-    pr.append(_t(m, 18, "Розкладання QR-табличок на ділянках досліду", 15, True))
+    blind = data.get("blind")
+    pr.append(_t(m, 18, "Розкладання QR-табличок на ділянках досліду" + (" (сліпий облік)" if blind else ""), 15, True))
     pr.append(_t(m, 25, f"Дослід {exp['id']}" + (f" · {exp['name']}" if exp["name"] else "") + f" · створено {exp['created']}", 9, False, "l", "#444444"))
     pr.append(_r(m, 29, W - 2 * m, 0.4, "#1a4b8c"))
-    rows = [("Ділянок (табличок)", str(exp["n_plots"])), ("Варіантів", str(exp["n_variants"])), ("Повторностей", str(exp["n_reps"])),
-            ("Підпис схеми", exp["signature"]), ("Формат QR", f"{FORMAT}, версія {info['version']}, рівень {info['ecc'].upper()}, модуль {info['module']:.2f} мм"),
-            ("Початок схеми", exp["origin"] or "ряд 1, місце 1 (див. карту)")]
+    rows = ([("Ділянок (табличок)", str(exp["n_plots"]))] + ([] if blind else [("Варіантів", str(exp["n_variants"]))]) + [("Повторностей", str(exp["n_reps"])),
+            ("Підпис схеми", exp["signature"]), ("Формат QR", f"{FORMAT_BLIND if blind else FORMAT}, версія {info['version']}, рівень {info['ecc'].upper()}, модуль {info['module']:.2f} мм"),
+            ("Початок схеми", exp["origin"] or "ряд 1, місце 1 (див. карту)")])
     y = 37
     for a, b in rows:
         pr.append(_t(m, y, a + ":", 9.5, True)); pr.append(_t(m + 48, y, _trunc(b, 9.5, W - 2 * m - 48), 9.5)); y += 5.8
@@ -598,11 +691,16 @@ def instruction_page(data, key, opts, info):
         f"Якщо QR-код пошкоджено, скористайтеся кодом під QR (формат {exp['id']}-012-X): останній символ контрольний, тож польовий журнал виявить помилку ручного введення.",
         "Практичні поради: друкуйте на водостійкому матеріалі або ламінуйте; прикріплюйте табличку рівно, без перегинів і відблисків; не зменшуйте QR-код під час друку (масштаб 100 %); при мінімальному розмірі модуля менше 0,4 мм оберіть більшу табличку.",
     ]
+    if blind:
+        steps[2] = "Розкладайте за картою й чек-листом: табличка з номером n і шифром встановлюється в клітинку з тим самим номером і шифром на карті. Колір усіх табличок однаковий."
+        steps[4] = "Після встановлення відскануйте кожну табличку телефоном: польовий журнал покаже номер, шифр і місце ділянки (назв варіантів немає – облік сліпий). Відмітьте у чек-листі «Встановлено» й «Скановано»."
+        steps[5] = f"Якщо QR-код пошкоджено, введіть шифр ділянки, надрукований великими літерами (5 символів, останній – контрольний): польовий журнал виявить помилку введення."
     for i, st in enumerate(steps, 1):
         lines = wrap_text(st, 9.5, W - 2 * m - 7, 8)
         pr.append(_t(m, y, f"{i}.", 9.5, True))
         for ln in lines: pr.append(_t(m + 7, y, ln, 9.5)); y += 4.7
         y += 2.2
+    if blind: return pr
     y += 2; pr.append(_t(m, y, "Скільки табличок містить повний опис у QR", 11.5, True, "l", "#1a4b8c")); y += 6.2
     names = {"full": "дослід, назва, повторність, варіант, рівні, місце + службовий рядок", "no_name": "без назви досліду (дослід, повторність, варіант, рівні, місце)",
              "no_levels": "без назв рівнів (дослід, повторність, варіант, місце)", "min": "лише службовий рядок SAD1 (потрібен польовий журнал)"}
@@ -617,7 +715,8 @@ def map_pages(data, key, opts):
     by_no = {p["plot"]: p for p in plots}; maxpos = max(max(c) for c in grid.values())
     u = min(26.0, (W - 2 * m - lab_w) / maxpos); ch = max(5.5, min(15.0, u * 0.85))
     rows = sorted(grid); per_page = max(1, int((H - top - bottom) // (ch + 1.0)))
-    legend_h = 8 + 6 * math.ceil(len(data["variants"]) / 3)
+    blind = data.get("blind")
+    legend_h = 0 if blind else 8 + 6 * math.ceil(len(data["variants"]) / 3)
     pages = []; chunks = [rows[i:i + per_page] for i in range(0, len(rows), per_page)]
     for pi, chunk in enumerate(chunks):
         pr = [_t(m, 11, f"Карта розкладки – дослід {exp['id']}" + (f" · {exp['name']}" if exp["name"] else ""), 13, True),
@@ -637,19 +736,20 @@ def map_pages(data, key, opts):
                 while j + 1 < len(cells) and cells[j + 1][0] == cells[j][0] + 1 and cells[j + 1][1] == (kind, no) and kind == "plot": j += 1
                 x0 = m + lab_w + (pos - 1) * u; wd = (cells[j][0] - pos + 1) * u
                 if kind == "plot":
-                    pl = by_no[no]; col = variant_color(pl["variant"]); fg = on_color(col)
+                    pl = by_no[no]; col = "#cfd8dc" if blind else variant_color(pl["variant"]); fg = "#111111" if blind else on_color(col)
                     pr.append(_r(x0, y0, wd, ch, col, "#ffffff", 0.35))
+                    sub = pl["cipher"] if blind else f"В{pl['variant']}"
                     if wd >= 11 and ch >= 8:
-                        pr.append(_t(x0 + wd / 2, y0 + ch * 0.50, str(no), min(10.5, ch * 0.62), True, "c", fg)); pr.append(_t(x0 + wd / 2, y0 + ch * 0.86, f"В{pl['variant']}", min(7.5, ch * 0.42), False, "c", fg))
+                        pr.append(_t(x0 + wd / 2, y0 + ch * 0.50, str(no), min(10.5, ch * 0.62), True, "c", fg)); pr.append(_t(x0 + wd / 2, y0 + ch * 0.86, _trunc(sub, min(7.5, ch * 0.42), wd - 1, blind), min(7.5, ch * 0.42), blind, "c", fg))
                     elif wd >= 6: pr.append(_t(x0 + wd / 2, y0 + ch * 0.66, str(no), min(7.0, wd * 0.55), True, "c", fg))
                 else: pr.append(_r(x0, y0, wd, ch, "#e6e6e6", "#ffffff", 0.35))
                 i = j + 1
         last = pi == len(chunks) - 1; used = top + len(chunk) * (ch + 1.0)
-        if last and used + legend_h + 4 <= H - 6:
+        if last and not blind and used + legend_h + 4 <= H - 6:
             _legend(pr, data, m, used + 6, W - 2 * m)
         pages.append(pr)
     used_last = top + len(chunks[-1]) * (ch + 1.0)
-    if used_last + legend_h + 4 > H - 6:
+    if not blind and used_last + legend_h + 4 > H - 6:
         pr = [_t(m, 11, f"Карта розкладки – легенда варіантів · дослід {exp['id']}", 13, True)]; _legend(pr, data, m, 22, W - 2 * m); pages.append(pr)
     return pages
 
@@ -665,7 +765,8 @@ def _legend(pr, data, x, y, width):
 
 def checklist_pages(data, key, opts):
     exp, plots = data["exp"], data["plots"]; W, H = 210, 297; m = 10; cw = [10, 36, 10, 52, 24, 28, 15, 15]; rh = 6.4; top = 30; per = int((H - top - 12) // rh) - 1
-    heads = ["№", "Ряд / місце", "Повт.", "Варіант", "Код", "Сусіди", "Встан.", "Скан."]; chunks = [plots[i:i + per] for i in range(0, len(plots), per)]; pages = []
+    blind = data.get("blind")
+    heads = ["№", "Ряд / місце", "Повт.", "Шифр" if blind else "Варіант", "Код", "Сусіди", "Встан.", "Скан."]; chunks = [plots[i:i + per] for i in range(0, len(plots), per)]; pages = []
     for pi, chunk in enumerate(chunks):
         pr = [_t(m, 12, f"Чек-лист розкладання – дослід {exp['id']}" + (f" · {exp['name']}" if exp["name"] else ""), 12.5, True),
               _t(m, 18, f"підпис схеми {exp['signature']} · аркуш {pi + 1} з {len(chunks)} · «Встан.» – табличку встановлено, «Скан.» – перевірено скануванням", 7.8, False, "l", "#444444")]
@@ -673,12 +774,13 @@ def checklist_pages(data, key, opts):
         for h_, w_ in zip(heads, cw): pr.append(_r(x, top - rh, w_, rh, "#d9e2f3", "#888888", 0.2)); pr.append(_t(x + w_ / 2, top - 2.0, h_, 7.6, True, "c")); x += w_
         by_no = {p["plot"]: p for p in plots}
         for i, p in enumerate(chunk):
-            y = top + i * rh; x = m; col = variant_color(p["variant"])
+            y = top + i * rh; x = m; col = None if blind else variant_color(p["variant"])
             l = f"№{p['left']}" if p["left"] else "поч."; r_ = f"№{p['right']}" if p["right"] else "кін."
             vals = [str(p["plot"]), _trunc(p["pos_text"], 7.2, cw[1] - 2), str(p["rep"]), "", p["code"], f"← {l}  {r_} →", "", ""]
             for k, (v, w_) in enumerate(zip(vals, cw)):
                 pr.append(_r(x, y, w_, rh, None, "#888888", 0.15))
-                if k == 3:
+                if k == 3 and blind: pr.append(_t(x + 1.2, y + rh * 0.70, p["cipher"], 8.2, True))
+                elif k == 3:
                     pr.append(_r(x + 0.6, y + 0.9, 3.0, rh - 1.8, col, None, 0)); txt = _trunc(f"{p['vcode']} · {' + '.join(p['levels'])}", 7.0, w_ - 5.2)
                     pr.append(_t(x + 4.2, y + rh * 0.68, txt, 7.0))
                 elif k in (6, 7): pr.append(_r(x + w_ / 2 - 1.8, y + rh / 2 - 1.8, 3.6, 3.6, None, "#333333", 0.25))
@@ -691,7 +793,7 @@ def checklist_pages(data, key, opts):
 def render_layout_pdf(path, data, key="S", opts=None, info=None):
     """PDF для звичайного паперу: інструкція, карта розкладки, чек-лист. → кількість сторінок."""
     opts = opts or {}; font_paths(); info = info or layout_info(data, opts.get("ecc", "m"), key)
-    c = _rl.Canvas(path, pagesize=(210 * 72 / 25.4, 297 * 72 / 25.4)); c.setTitle(f"Розкладка табличок – дослід {data['exp']['id']}")
+    c = _rl.Canvas(path, pagesize=(210 * 72 / 25.4, 297 * 72 / 25.4)); c.setTitle(f"Розкладка табличок – дослід {data['exp']['id']}" + (" (сліпий облік)" if data.get("blind") else ""))
     pages = [("p", instruction_page(data, key, opts, info))] + [("l", pg) for pg in map_pages(data, key, opts)] + [("p", pg) for pg in checklist_pages(data, key, opts)]
     for kind, prims in pages:
         w_mm, h_mm = (297, 210) if kind == "l" else (210, 297)
@@ -708,14 +810,17 @@ def layout_info(data, ecc="m", key="S"):
 def summary(data, key, ecc="m", style="descriptive"):
     """Зведення для користувача: версія QR, модуль, орієнтовна відстань сканування, кількість аркушів і попередження."""
     plots = data["plots"]; info = layout_info(data, ecc, key); P = LABEL_PRESETS[key]; warns = []
-    if style == "descriptive":
+    if style == "blind":
+        warns.append("Сліпий облік: на табличках, карті, у чек-листі й QR немає назв і номерів варіантів – лише номер і шифр ділянки. "
+                     "Ключ (шифр → варіант) зберігайте окремо в керівника: кнопка «🔑 Ключ шифрів…». Файл схеми досліду теж містить ключ – не передавайте його виконавцям.")
+    elif style == "descriptive":
         n_full = info["tiers"].get("full", 0)
         if n_full < len(plots):
             warns.append(f"У {len(plots) - n_full} із {len(plots)} табличок QR містить скорочений опис (щільність обмежена розміром таблички). Повний опис надруковано на самій табличці; "
                          f"для повного опису в QR оберіть більшу табличку.")
     else:
         warns.append("Компактний QR містить лише службовий рядок: звичайна камера покаже технічний текст; опис варіанта видно на самій табличці та у польовому журналі.")
-    if len(data["variants"]) > len(PALETTE):
+    if style != "blind" and len(data["variants"]) > len(PALETTE):
         warns.append(f"Варіантів більше, ніж кольорів ({len(PALETTE)}): кольори повторюються, орієнтуйтеся на номер варіанта.")
     if data.get("skipped"): warns.append(f"{data['skipped']} записів схеми без коректних факторів пропущено.")
     if info["module"] and info["module"] < MIN_MODULE_MM: warns.append(f"Модуль QR {info['module']:.2f} мм менший за {MIN_MODULE_MM} мм: оберіть більшу табличку.")
@@ -729,6 +834,12 @@ def summary(data, key, ecc="m", style="descriptive"):
 # ═══════════════════════════════════════════════════════════════
 def manifest_dict(data, style="descriptive", ecc="m"):
     exp = data["exp"]
+    if data.get("blind"):                                             # для виконавців: без факторів і варіантів
+        return {"format": "SAD-plots", "version": 1, "qr_format": FORMAT_BLIND, "blind": True,
+                "experiment": {k: exp[k] for k in ("id", "name", "created", "model", "origin", "signature", "n_plots", "n_reps")},
+                "qr": {"style": "blind", "ecc": ecc.upper(), "check": "Luhn mod 36 over E+P(4)+K; cipher K: 5 chars, last – Luhn mod 31 (id_alphabet)", "id_alphabet": ID_ALPHABET},
+                "plots": [{"plot": p["plot"], "code": p["code"], "cipher": p["cipher"], "rep": p["rep"], "row": p["row"], "segments": [list(s) for s in p["segments"]],
+                           "position_text": p["pos_text"], "left": p["left"], "right": p["right"], "payload": p["payload"]} for p in data["plots"]]}
     return {"format": "SAD-plots", "version": 1, "qr_format": FORMAT,
             "experiment": {k: exp[k] for k in ("id", "name", "created", "model", "design", "origin", "signature", "n_plots", "n_variants", "n_reps", "factors", "trait")},
             "qr": {"style": style, "ecc": ecc.upper(), "check": "Luhn mod 36 over E+P(4)+R(3)+V(3)", "id_alphabet": ID_ALPHABET},
@@ -746,6 +857,19 @@ def export_xlsx(path, data):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     exp = data["exp"]; wb = Workbook(); ws = wb.active; ws.title = "Розкладка"
+    if data.get("blind"):
+        ws.append(["№ ділянки", "Шифр", "Код", "Повторність", "Ряд", "Місце", "Ліворуч", "Праворуч", "Встановлено", "Скановано"])
+        for c in ws[1]: c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E2F3"); c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        for p in data["plots"]:
+            ws.append([p["plot"], p["cipher"], p["code"], p["rep"], p["row"], p["pos_text"].split(", ", 1)[-1] if p["units"] == 1 else p["pos_text"],
+                       (f"№{p['left']}" if p["left"] else "початок ряду"), (f"№{p['right']}" if p["right"] else "кінець ряду"), "", ""])
+            ws.cell(ws.max_row, 2).font = Font(bold=True)
+        for col_, wd in zip("ABCDEFGHIJ", (11, 10, 14, 12, 7, 22, 14, 14, 13, 12)): ws.column_dimensions[col_].width = wd
+        ws.freeze_panes = "A2"; wi = wb.create_sheet("Дослід")
+        for a, b in (("Код досліду", exp["id"]), ("Назва", exp["name"]), ("Створено", exp["created"]), ("Ділянок", exp["n_plots"]), ("Підпис схеми", exp["signature"]),
+                     ("Початок схеми", exp["origin"]), ("Формат QR", FORMAT_BLIND), ("Облік", "сліпий: варіанти приховано шифрами")):
+            wi.append([a, b]); wi.cell(wi.max_row, 1).font = Font(bold=True)
+        wi.column_dimensions["A"].width = 22; wi.column_dimensions["B"].width = 50; wb.save(path); return
     heads = ["№ ділянки", "Код", "Повторність", "Варіант", "Код варіанта"] + [f["name"] for f in exp["factors"]] + ["Ряд", "Місце", "Ліворуч", "Праворуч", "Встановлено", "Скановано"]
     ws.append(heads)
     for c in ws[1]: c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E2F3"); c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -773,19 +897,75 @@ def export_xlsx(path, data):
 def save_png_labels(folder, data, key, opts=None, dpi=300):
     os.makedirs(folder, exist_ok=True); out = []
     for p in data["plots"]:
-        fn = os.path.join(folder, f"{p['plot']:03d}_{p['code']}_П{p['rep']}_В{p['variant']}.png")
+        fn = os.path.join(folder, f"{p['plot']:03d}_{p['cipher']}.png" if data.get("blind") else f"{p['plot']:03d}_{p['code']}_П{p['rep']}_В{p['variant']}.png")
         render_label_png(data, p, key, opts, dpi).save(fn, dpi=(dpi, dpi)); out.append(fn)
     return out
 
 
-def save_all(folder, data, key, opts=None, dpi=300):
-    """Пише в теку весь комплект: PDF табличок, PDF розкладки, Excel, маніфест і PNG кожної таблички. → список файлів."""
+def key_dict(data, scheme):
+    """Ключ сліпого обліку (лише для керівника): шифр → ділянка, повторність, варіант; повна схема досліду – для розшифрування журналів."""
+    exp = data["exp"]; cfg = {k: v for k, v in (scheme.get("cfg") or {}).items() if k != "qr"}
+    return {"format": "SAD-blind-key", "version": 1, "warning": "КЛЮЧ СЛІПОГО ОБЛІКУ – не передавати виконавцям",
+            "experiment": dict({k: exp[k] for k in ("id", "created", "signature", "n_plots", "n_variants", "n_reps", "factors")}, name=exp.get("name_full", exp["name"])),
+            "variants": [{"n": v["n"], "code": v["code"], "levels": v["levels"]} for v in data["variants"]],
+            "plots": [{"plot": p["plot"], "cipher": p["cipher"], "rep": p["rep"], "variant": p["variant"], "variant_code": p["vcode"], "levels": p["levels"], "position_text": p["pos_text"]}
+                      for p in data["plots"]],
+            "scheme": {"type": scheme.get("type", "multi_factor_scheme"), "factor_defs": scheme.get("factor_defs") or [], "variant_names": scheme.get("variant_names") or [],
+                       "cfg": cfg, "plants": scheme.get("plants") or []}}
+
+
+def export_key(path, data, scheme):
+    """Ключ: JSON (для програми) і поруч Excel-таблиця «шифр → варіант» (для людини). → [шляхи]."""
+    if not data.get("blind"): raise ValueError("Ключ створюється лише для сліпого обліку.")
+    with open(path, "w", encoding="utf-8") as f: json.dump(key_dict(data, scheme), f, ensure_ascii=False, indent=1)
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    exp = data["exp"]; wb = Workbook(); ws = wb.active; ws.title = "Ключ"
+    ws.append([f"КЛЮЧ СЛІПОГО ОБЛІКУ – дослід {exp['id']} {exp.get('name_full', exp['name'])} (не передавати виконавцям)"]); ws["A1"].font = Font(bold=True, color="C62828")
+    ws.append(["Шифр", "№ ділянки", "Повторність", "Варіант", "Код варіанта"] + [f["name"] for f in exp["factors"]])
+    for c in ws[2]: c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="D9E2F3")
+    for p in sorted(data["plots"], key=lambda q: q["cipher"]): ws.append([p["cipher"], p["plot"], p["rep"], p["variant"], p["vcode"]] + list(p["levels"]))
+    for col_, wd in zip("ABCDEFGH", (10, 11, 12, 9, 13, 24, 24, 24)): ws.column_dimensions[col_].width = wd
+    ws.freeze_panes = "A3"; xp = os.path.splitext(path)[0] + ".xlsx"; wb.save(xp)
+    return [path, xp]
+
+
+def blind_scheme(data, scheme):
+    """Схема для виконавців: розміщення ділянок без факторів – кожна ділянка «варіант» зі своїм шифром. Польовий журнал працює з нею як зі звичайною схемою;
+    після обліку журнали розшифровуються ключем (sad_journal_trial.decode_blind_folder)."""
+    if not data.get("blind"): raise ValueError("Схема для виконавців створюється лише для сліпого обліку.")
+    order = [p["cipher"] for p in data["plots"]]; idx = {c: i + 1 for i, c in enumerate(order)}; cell = {}
+    for p in data["plots"]:
+        for r, a, b in p["segments"]:
+            for q in range(a, b + 1): cell[(r, q)] = p
+    plants = []
+    for pl in scheme.get("plants") or []:
+        q = {k: pl.get(k) for k in ("row", "position", "role", "status", "value", "plot_id") if k in pl}
+        p = cell.get((int(pl["row"]), int(pl["position"]))) if pl.get("role") == "recorded" else None
+        q.update(factors={"Шифр": idx[p["cipher"]]} if p else {}, replication=p["rep"] if p else pl.get("replication"), variant=None, block=None, kind=None)
+        plants.append(q)
+    cfg = {k: v for k, v in (scheme.get("cfg") or {}).items() if k in ("model", "location", "plant_spacing", "row_spacing")}
+    cfg["blind"] = {"exp_id": data["exp"]["id"], "signature": data["exp"]["signature"], "n_plots": len(order)}
+    return {"type": "multi_factor_scheme", "factor_defs": [{"name": "Шифр", "levels": order}], "variant_names": [], "cfg": cfg, "plants": plants}
+
+
+def export_blind_scheme(path, data, scheme):
+    with open(path, "w", encoding="utf-8") as f: json.dump(blind_scheme(data, scheme), f, ensure_ascii=False, indent=1)
+    return path
+
+
+def save_all(folder, data, key, opts=None, dpi=300, scheme=None):
+    """Пише в теку весь комплект: PDF табличок, PDF розкладки, Excel, маніфест і PNG кожної таблички; для сліпого обліку – ще схему для виконавців
+    (ключа в комплекті немає). → список файлів."""
     opts = opts or {}; os.makedirs(folder, exist_ok=True); E = data["exp"]["id"]; files = []
     f = os.path.join(folder, f"{E}_таблички.pdf"); render_labels_pdf(f, data, key, opts); files.append(f)
     f = os.path.join(folder, f"{E}_розкладка.pdf"); render_layout_pdf(f, data, key, opts); files.append(f)
     f = os.path.join(folder, f"{E}_розкладка.xlsx"); export_xlsx(f, data); files.append(f)
     f = os.path.join(folder, f"{E}_manifest.json"); export_manifest(f, data, opts.get("style", "descriptive"), opts.get("ecc", "m")); files.append(f)
     files += save_png_labels(os.path.join(folder, f"{E}_png"), data, key, opts, dpi)
+    if data.get("blind") and scheme is not None:
+        sub = os.path.join(folder, f"{E}_схема_для_виконавців"); os.makedirs(sub, exist_ok=True)
+        files.append(export_blind_scheme(os.path.join(sub, "схема.sadp"), data, scheme))
     return files
 
 

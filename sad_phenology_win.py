@@ -255,7 +255,7 @@ class PhenologyWindow:
         self.parent = parent; self.gs = gs
         self.preset_key = "pome"; self.phases = P.preset_phases("pome")
         self.cur_year = _dt.date.today().year; self.years_data = {self.cur_year: []}
-        self.standard = ""; self.thr = 3.0; self.groups = {}; self.group_std = {}
+        self.standard = ""; self.thr = 3.0; self.groups = {}; self.group_std = {}; self.visits_store = {}
         self.series = None; self.weather_note = ""; self.sum_cfg = {"kind": "sat", "base": 10.0, "start": ["md", 3, 1]}
         self.entries = []; self.hdr = []; self._job = None; self._cell = (0, 0); self.results_win = None; self._path = None
         self.page = 0; self._paged_mode = False; self._off = 0; self._page_len = 0; self._total = 0; self._sig = None
@@ -268,7 +268,7 @@ class PhenologyWindow:
         mb = tk.Menu(w)
         fm = tk.Menu(mb, tearoff=0)
         fm.add_command(label="Відкрити проєкт…", command=self.open_project); fm.add_command(label="Зберегти проєкт…", command=self.save_project)
-        fm.add_separator(); fm.add_command(label="Дати в Excel…", command=self.export_excel); fm.add_command(label="Бланк для поля (Word)…", command=self.blank_form)
+        fm.add_separator(); fm.add_command(label="Зберегти в Excel…", command=self.export_excel); fm.add_command(label="Бланк для поля (Word)…", command=self.blank_form)
         mb.add_cascade(label="Файл", menu=fm)
         dm = tk.Menu(mb, tearoff=0)
         dm.add_command(label="З польового журналу…", command=self.import_journal); dm.add_command(label="З Excel…", command=self.import_excel)
@@ -289,11 +289,11 @@ class PhenologyWindow:
         tk.Button(tb, text="📥 Excel…", font=RF, command=self.import_excel).pack(side=tk.LEFT, padx=2)
         sep(tb); tk.Label(tb, text="Культура:", font=RB, fg="#1a4b8c").pack(side=tk.LEFT, padx=(0, 4))
         self.preset_var = tk.StringVar(value=P.PRESETS["pome"]["name"])
-        cb = ttk.Combobox(tb, textvariable=self.preset_var, values=[P.PRESETS[k]["name"] for k in P.PRESET_ORDER], state="readonly", width=34); cb.pack(side=tk.LEFT, padx=2)
+        cb = ttk.Combobox(tb, textvariable=self.preset_var, values=[P.PRESETS[k]["name"] for k in P.PRESET_ORDER], state="readonly", width=27); cb.pack(side=tk.LEFT, padx=2)
         cb.bind("<<ComboboxSelected>>", self._on_preset); self.preset_cb = cb
         tk.Button(tb, text="✎ Змінити фази…", font=RF, command=self.edit_phases).pack(side=tk.LEFT, padx=3)
         tk.Label(tb, text="  Стандарт:", font=RB, fg="#1a4b8c").pack(side=tk.LEFT); self.std_var = tk.StringVar()
-        self.std_cb = ttk.Combobox(tb, textvariable=self.std_var, state="readonly", width=22, postcommand=self._refresh_std); self.std_cb.pack(side=tk.LEFT, padx=3)
+        self.std_cb = ttk.Combobox(tb, textvariable=self.std_var, state="readonly", width=18, postcommand=self._refresh_std); self.std_cb.pack(side=tk.LEFT, padx=3)
         self.std_cb.bind("<<ComboboxSelected>>", lambda e: setattr(self, "standard", "" if self.std_var.get() == "(середнє за сортами)" else self.std_var.get()))
         tk.Button(tb, text="📚 Довідка", bg="#1a4b8c", fg="white", font=RF, command=self._show_help).pack(side=tk.RIGHT, padx=6)
         # ── ряд 2: решта дій – на видноті, згруповані за призначенням (ті самі, що в меню) ──
@@ -303,7 +303,7 @@ class PhenologyWindow:
         def gb(text, cmd): tk.Button(tbg, text=text, font=("Times New Roman", 10), command=cmd).pack(side=tk.LEFT, padx=1)
         grp("Дані:"); gb("📋 З буфера", self.paste_clipboard); gb("📊 Дата за % рослин (обходи)…", self.open_visits)
         grp("  Аналіз:"); gb("👥 Групи стиглості…", self.open_groups); gb("🌦 Погода (суми t)…", self.open_weather)
-        grp("  Файл:"); gb("💾 Зберегти", self.save_project); gb("📂 Відкрити", self.open_project); gb("🖨 Бланк для поля", self.blank_form); gb("📤 Дати в Excel", self.export_excel)
+        grp("  Файл:"); gb("💾 Зберегти", self.save_project); gb("📂 Відкрити", self.open_project); gb("🖨 Бланк для поля", self.blank_form); gb("📤 Зберегти в Excel", self.export_excel)
         tb2 = tk.Frame(w, padx=6); tb2.pack(fill=tk.X); self._tb2 = tb2
         self.pagebar = tk.Frame(w, padx=6, pady=2, bg="#fff3e0")
         self.pg_lbl = tk.Label(self.pagebar, bg="#fff3e0", font=RF, fg="#8c5a1a")
@@ -543,7 +543,34 @@ class PhenologyWindow:
             cur = y == self.cur_year
             tk.Button(self.years_bar, text=str(y), font=RB if cur else RF, relief=tk.SUNKEN if cur else tk.RAISED, bg="#1a4b8c" if cur else "#e8eef7", fg="white" if cur else "black", width=6, command=lambda y=y: self.goto_year(y)).pack(side=tk.LEFT, padx=1)
         tk.Button(self.years_bar, text="＋ Рік", font=RF, command=self.add_year).pack(side=tk.LEFT, padx=(6, 1))
+        tk.Button(self.years_bar, text="✎ Змінити рік", font=SM, command=self.rename_year).pack(side=tk.LEFT, padx=1)
         tk.Button(self.years_bar, text="✖ Видалити рік", font=SM, command=self.delete_year).pack(side=tk.LEFT, padx=1)
+
+    def rename_year(self, new=None):
+        """Змінює рік поточної вкладки (наприклад, 2026 → 2019 для раніше зібраних даних); дані вкладки зберігаються."""
+        old = self.cur_year
+        if new is None:
+            new = simpledialog.askinteger("Змінити рік", f"Який рік досліду замість {old}?", initialvalue=old, minvalue=1900, maxvalue=2200, parent=self.win)
+            if new is None or new == old: return None
+        if new in self.years_data and new != old:
+            messagebox.showwarning("Змінити рік", f"Рік {new} уже є. Оберіть інший або спершу видаліть наявну вкладку {new}.", parent=self.win); return None
+        self._save_current(); rows = self.years_data.pop(old, [])
+        for r in rows:                                                # дати в клітинках – на новий рік (той самий день і місяць)
+            for k, v in list(r.get("dates", {}).items()):
+                d, _m = P.parse_date_flex(v, old)
+                if d is not None and d.year == old:
+                    try: r["dates"][k] = P.fmt_date(d.replace(year=new))
+                    except ValueError: r["dates"][k] = P.fmt_date(_dt.date(new, 2, 28))      # 29.02 у невисокосному році
+        if old in self.visits_store:                                  # обходи цього року – теж на новий рік
+            st = self.visits_store.pop(old)
+            def mv(ds):
+                d, _m = P.parse_date_flex(ds, old)
+                try: return P.fmt_date(d.replace(year=new)) if d else ds
+                except ValueError: return P.fmt_date(_dt.date(new, 2, 28))
+            st["dates"] = [mv(x) for x in st.get("dates", [])]; st["values"] = {k: {mv(d): v for d, v in vv.items()} for k, vv in st.get("values", {}).items()}
+            self.visits_store[new] = st
+        self.years_data[new] = rows; self.cur_year = new
+        self._write_grid(rows); self._update_years(); self._validate_all(); return new
 
     def goto_year(self, y):
         self._save_current(); self.cur_year = y; self.page = 0; self.years_data.setdefault(y, []); self._write_grid(self.years_data[y]); self._update_years(); self._validate_all()
@@ -692,8 +719,19 @@ class PhenologyWindow:
         if not quiet: messagebox.showinfo("Польовий журнал", msg, parent=self.win)
         self._from_journal_msg = msg; return res
 
+    def _offer_open(self, path, what):
+        if path and messagebox.askyesno(what, f"Файл збережено:\n{path}\n\nВідкрити його?", parent=self.win):
+            from sad_common import open_file_cross
+            open_file_cross(path)
+
     def export_excel(self, path=None):
-        path = path or filedialog.asksaveasfilename(parent=self.win, defaultextension=".xlsx", initialfile="фенологія_дати.xlsx", filetypes=[("Excel", "*.xlsx")], title="Дати в Excel")
+        asked = path is None
+        res = self._export_excel(path)
+        if asked and res: self._offer_open(res, "Зберегти в Excel")
+        return res
+
+    def _export_excel(self, path=None):
+        path = path or filedialog.asksaveasfilename(parent=self.win, defaultextension=".xlsx", initialfile="фенологія_дати.xlsx", filetypes=[("Excel", "*.xlsx")], title="Зберегти в Excel")
         if not path: return
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment
@@ -716,6 +754,12 @@ class PhenologyWindow:
 
     def blank_form(self, path=None):
         """Порожній бланк (Word) для запису дат у полі: сорти × фази."""
+        asked = path is None
+        res = self._blank_form(path)
+        if asked and res: self._offer_open(res, "Бланк для поля")
+        return res
+
+    def _blank_form(self, path=None):
         import sad_report as R
         self._save_current(); rows = P.assign_reps(self.years_data.get(self.cur_year, [])); n = max(20, len(rows))
         path = path or filedialog.asksaveasfilename(parent=self.win, defaultextension=".docx", initialfile=f"бланк_фенологія_{self.cur_year}.docx", filetypes=[("Word", "*.docx")], title="Бланк для поля")
@@ -749,8 +793,42 @@ class PhenologyWindow:
         ng = len(set(self.groups.values())); ns = len(self.group_std)
         self.groups_lbl.configure(text=(f"групи стиглості: {ng} (стандартів груп: {ns})" if ng else ""))
 
+    def _auto_weather(self):
+        """Місце досліду відоме (з конструктора схеми / журналу чи проєкту), а погоду ще не підключено → NASA POWER у фоні, потім аналіз."""
+        import threading, queue
+        import sad_weather_core as W
+        lat, lon = self.weather_coords; ys = sorted(int(y) for y, rows in self.years_data.items() if any(r.get("dates") for r in rows))
+        if not ys: return False
+        d0 = _dt.date(ys[0], 1, 1); d1 = min(_dt.date(ys[-1], 12, 31), _dt.date.today() - _dt.timedelta(days=2))
+        place = getattr(self, "weather_place", "") or f"{lat:g}; {lon:g}"
+        pw = tk.Toplevel(self.win); pw.title("Погода для сум температур"); pw.transient(self.win); set_icon(pw); pw.resizable(False, False)
+        tk.Label(pw, text=f"Отримання добової температури NASA POWER\nдля місця досліду «{place}» за {ys[0]}–{ys[-1]}…", font=RF, padx=20, pady=12, justify="left").pack()
+        msg = tk.Label(pw, text="", font=SM, fg="#1a4b8c", padx=20); msg.pack(pady=(0, 12)); self._auto_weather_win = pw
+        q = queue.Queue(); self._weather_tried = True
+        def work():
+            try: q.put(("done", W.fetch_nasa(lat, lon, d0, d1, progress=lambda m: q.put(("prog", m)))))
+            except Exception as e: q.put(("err", str(e)))
+        threading.Thread(target=work, daemon=True).start()
+        def poll():
+            try:
+                while True:
+                    kind, val = q.get_nowait()
+                    if kind == "prog": msg.configure(text=val); continue
+                    pw.destroy()
+                    if kind == "done" and len(val):
+                        self.series = val; self.weather_note = f"NASA POWER – {place}: {len(val)} діб, {val.dates[0]:%d.%m.%Y} – {val.dates[-1]:%d.%m.%Y}"; self._update_weather_label()
+                        W.remember_place(getattr(self, "weather_place", ""), lat, lon)
+                    else:
+                        self.status.configure(text=f"Погоду NASA не отримано ({val if kind == 'err' else 'немає даних'}) – аналіз без сум температур.", fg="#8c5a1a")
+                    self._run(); return
+            except queue.Empty: pass
+            if pw.winfo_exists(): self.win.after(150, poll)
+        self.win.after(150, poll); return True
+
     def _run(self):
         self._save_current(); self._validate_all()
+        if self.series is None and getattr(self, "weather_coords", None) and not getattr(self, "_weather_tried", False):
+            if self._auto_weather(): return None
         try: ctx = P.analyze(self.years_data, self.phases, self.standard, self._thr(), self.series, self.sum_cfg if self.series is not None else None,
                              groups=self.groups, group_std=self.group_std)
         except ValueError as e: messagebox.showwarning("Фенологія", str(e), parent=self.win); return None
@@ -766,7 +844,7 @@ class PhenologyWindow:
     # ── проєкт ──
     def project(self):
         self._save_current()
-        return {"preset": self.preset_key, "phases": self.phases, "years_data": self.years_data, "cur_year": self.cur_year, "standard": self.standard, "thr": self._thr(), "sum_cfg": self.sum_cfg, "weather_coords": getattr(self, "weather_coords", None), "weather_place": getattr(self, "weather_place", ""),
+        return {"preset": self.preset_key, "phases": self.phases, "years_data": self.years_data, "cur_year": self.cur_year, "standard": self.standard, "thr": self._thr(), "sum_cfg": self.sum_cfg, "weather_coords": getattr(self, "weather_coords", None), "weather_place": getattr(self, "weather_place", ""), "visits": {str(y): v for y, v in self.visits_store.items()},
                 "groups": self.groups, "group_std": self.group_std}
 
     def save_project(self, path=None):
@@ -785,6 +863,7 @@ class PhenologyWindow:
         self.thr = float(d.get("thr", 3.0)); self.thr_var.set(str(self.thr).rstrip("0").rstrip(".")); self.sum_cfg = d.get("sum_cfg", self.sum_cfg); self._path = path
         self.groups = dict(d.get("groups") or {}); self.group_std = dict(d.get("group_std") or {}); self._update_groups_label()
         if d.get("weather_coords"): self.weather_coords = tuple(d["weather_coords"]); self.weather_place = d.get("weather_place", "")
+        self.visits_store = {int(y): v for y, v in (d.get("visits") or {}).items()}
         self.page = 0; self._write_grid(self.years_data[self.cur_year]); self._update_years(); self._validate_all()
 
     def _thr(self):
