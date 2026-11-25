@@ -1,0 +1,49 @@
+name: Хмара – тести правил доступу й синхронізації
+
+# Перевіряє правила доступу Firestore (cloud/firestore.rules) і синхронізацію S.A.D. (sad_cloud.py) на локальних емуляторах Firebase.
+# Запуск: автоматично при зміні теки cloud/ або вручну (Actions → «Хмара – тести правил доступу» → Run workflow)
+on:
+  push:
+    paths: ["cloud/**", "sad_cloud.py", "test_sad_cloud.py", ".github/workflows/cloud-rules.yml"]
+  pull_request:
+    paths: ["cloud/**", "sad_cloud.py", "test_sad_cloud.py"]
+  workflow_dispatch:
+
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: cloud
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: cloud/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Встановлення залежностей
+        run: |
+          npm ci
+          python -m pip install --upgrade pip
+          pip install -r ../requirements-build.txt
+
+      - name: Тести правил на емуляторі
+        run: npm test
+
+      - name: Тести синхронізації S.A.D. на емуляторах
+        env:
+          PYTHONUTF8: "1"
+        run: npx firebase emulators:exec --only auth,firestore --project demo-sad "cd .. && python test_sad_cloud.py"
