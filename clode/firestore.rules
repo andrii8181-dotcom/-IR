@@ -1,0 +1,120 @@
+rules_version = '2';
+
+// Правила доступу до хмари S.A.D. (Cloud Firestore).
+// Модель даних і ролі – у cloud/README.md.
+//   власник  – керівник, який створив дослід у S.A.D. (ownerUid);
+//   виконавець – запрошений за електронною адресою (memberEmails).
+// Значення обліку ніколи не змінюються: виправлення – це новий запис із полем supersedes.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Адресу підтверджено (Google – завжди; пошта з паролем – після листа-підтвердження)
+    function verified() {
+      return signedIn()
+        && request.auth.token.email is string
+        && request.auth.token.email_verified == true;
+    }
+
+    function myEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function isOwnerOf(d) {
+      return signedIn() && d.ownerUid == request.auth.uid;
+    }
+
+    function isMemberOf(d) {
+      return verified() && myEmail() in d.memberEmails;
+    }
+
+    // ---------- профіль користувача ----------
+    match /users/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // ---------- дослід ----------
+    match /experiments/{expId} {
+
+      function exp() {
+        return get(/databases/$(database)/documents/experiments/$(expId)).data;
+      }
+
+      function canRead() {
+        return isOwnerOf(exp()) || isMemberOf(exp());
+      }
+
+      function validExp(d) {
+        return d.keys().hasAll(['ownerUid', 'code', 'mode', 'memberEmails', 'closedYears'])
+          && d.keys().hasOnly(['ownerUid', 'ownerEmail', 'code', 'name', 'mode', 'status',
+                               'memberEmails', 'closedYears', 'schemeSig', 'updatedAt'])
+          && d.code is string && d.code.size() > 0 && d.code.size() <= 40
+          && d.mode in ['open', 'blind']
+          && d.memberEmails is list && d.memberEmails.size() <= 100
+          && d.closedYears is list
+          // у сліпому режимі назва досліду в хмару не потрапляє
+          && (d.mode == 'open' || !('name' in d) || d.name == '');
+      }
+
+      allow read: if isOwnerOf(resource.data) || isMemberOf(resource.data);
+      // перевірити, чи дослід уже є (документа ще немає – нічого не розкривається)
+      allow get: if signedIn() && resource == null;
+      allow create: if verified()
+        && request.resource.data.ownerUid == request.auth.uid
+        && validExp(request.resource.data);
+      allow update: if isOwnerOf(resource.data)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && validExp(request.resource.data);
+      allow delete: if isOwnerOf(resource.data);
+
+      // версії схеми (з ділянками й маніфестом табличок) і показники – пише лише власник
+      match /schemes/{sigId} {
+        allow read: if canRead();
+        allow write: if isOwnerOf(exp());
+      }
+
+      match /indicators/{indId} {
+        allow read: if canRead();
+        allow write: if isOwnerOf(exp());
+      }
+
+      // ---------- значення обліку ----------
+      match /values/{valId} {
+
+        function validValue(d) {
+          return d.keys().hasAll(['plot', 'row', 'pos', 'indicator', 'year', 'value', 'authorUid',
+                                  'serverTime', 'clientTime'])
+            && d.keys().hasOnly(['plot', 'row', 'pos', 'indicator', 'year', 'value', 'authorUid',
+                                 'authorEmail', 'serverTime', 'clientTime', 'device',
+                                 'schemeSig', 'supersedes', 'deleted'])
+            // ділянка (номер із QR) і рослина/клітинка в ній: ряд і місце, як у польовому журналі
+            && d.plot is int && d.plot > 0
+            && d.row is int && d.row > 0
+            && d.pos is int && d.pos > 0
+            && d.indicator is string && d.indicator.size() > 0 && d.indicator.size() <= 80
+            && d.year is int && d.year >= 1900 && d.year <= 2200
+            // число, дата фенофази «РРРР-ММ-ДД» або null (порожнє – лише разом із deleted)
+            && (d.value is number
+                || (d.value is string && d.value.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+                || (d.value == null && 'deleted' in d && d.deleted == true))
+            && d.clientTime is timestamp
+            && (!('supersedes' in d) || d.supersedes is string)
+            && (!('deleted' in d) || d.deleted is bool);
+        }
+
+        allow read: if canRead();
+        allow create: if canRead()
+          && validValue(request.resource.data)
+          && request.resource.data.authorUid == request.auth.uid
+          && request.resource.data.serverTime == request.time
+          && !(request.resource.data.year in exp().closedYears);
+        allow update: if false;
+        allow delete: if isOwnerOf(exp());
+      }
+    }
+  }
+}

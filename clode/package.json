@@ -1,1 +1,15 @@
-
+{
+  "name": "sad-cloud",
+  "private": true,
+  "description": "Правила доступу хмари S.A.D. і тести до них",
+  "type": "module",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-sad \"node --test tests/rules.test.js\"",
+    "test:sad": "firebase emulators:exec --only auth,firestore --project demo-sad \"cd .. && python3 test_sad_cloud.py\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
+    "firebase": "12.19.0",
+    "firebase-tools": "15.37.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "_comment": "Публічні налаштування проєкту Firebase для S.A.D. і застосунку. apiKey не є секретом: дані захищають правила доступу (firestore.rules).",
+  "apiKey": "AIzaSyClB6foMo0MPktl2Jk5gNJ7ZjJp-wRqsBc",
+  "authDomain": "sad2-54cf9.firebaseapp.com",
+  "projectId": "sad2-54cf9",
+  "storageBucket": "sad2-54cf9.firebasestorage.app",
+  "messagingSenderId": "712968865780",
+  "appId": "1:712968865780:web:04cdf25f64813431ecdba1"
+}
